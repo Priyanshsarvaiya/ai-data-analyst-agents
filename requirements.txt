@@ -19,3 +19,5 @@ rich>=13.7.0
 # Dev / Testing (optional but recommended)
 pytest>=8.0.0
 ruff>=0.4.0
+
+streamlit>=1.31.0

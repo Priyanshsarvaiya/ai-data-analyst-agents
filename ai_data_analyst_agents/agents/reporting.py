@@ -1,46 +1,76 @@
 from __future__ import annotations
+from typing import Any, Dict
+import json
 
-from typing import Any
+from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
 
+SYSTEM_PROMPT = """You are a strict data analyst.
 
-def run_reporting(cfg, plan: dict[str, Any], profile: dict[str, Any], qa: dict[str, Any], eda: dict[str, Any], store, logger) -> str:
-    # Phase 1: deterministic report. Next step: have OpenRouter write narrative using these artifacts.
-    lines = []
-    lines.append("# Final Report")
-    lines.append("")
-    lines.append("## Executive Summary")
-    lines.append(f"- Business question: **{plan['business_question']}**")
-    lines.append(f"- Rows/Cols: **{profile['n_rows']} x {profile['n_cols']}**")
-    lines.append(f"- Duplicate rate: **{qa['duplicate_rate']:.2%}**")
-    lines.append(f"- Warnings: **{len(qa.get('warnings', []))}** (see `quality_warnings.md`)")
-    lines.append("")
-    lines.append("## Dataset Overview")
-    lines.append("- See `data_profile.json`")
-    lines.append("")
-    lines.append("## Data Quality Findings")
-    if qa.get("warnings"):
-        for w in qa["warnings"]:
-            lines.append(f"- {w}")
-    else:
-        lines.append("- No major issues detected by Phase 1 checks.")
-    lines.append("")
-    lines.append("## EDA Summary")
-    if eda.get("numeric_columns"):
-        lines.append(f"- Numeric columns: {', '.join(eda['numeric_columns'][:10])}")
-    if eda.get("charts"):
-        lines.append(f"- Charts generated: {', '.join(eda['charts'])}")
-    lines.append("")
-    lines.append("## Artifacts Index")
-    lines.append("- `analysis_plan.json`")
-    lines.append("- `data_profile.json`")
-    lines.append("- `quality_report.json`")
-    lines.append("- `quality_warnings.md`")
-    lines.append("- `cleaned.csv`")
-    lines.append("- `feature_log.json`")
-    lines.append("- `eda_summary.json`")
-    lines.append("- `charts/`")
-    report_md = "\n".join(lines)
+Rules:
+- Use ONLY the provided artifacts context.
+- Do NOT invent metrics, numbers, columns, or trends not present in the context.
+- When stating a numeric fact or concrete claim, include an evidence tag like [[EV:EV-xxxxxxxxxx]].
+- If you cannot support a claim with evidence, write: "Not computed in artifacts."
 
-    store.write_text("final_report.md", report_md)
-    logger.info("Wrote final_report.md")
-    return report_md
+Write a report with sections:
+1) Executive Summary
+2) Dataset Overview
+3) Data Quality Findings
+4) EDA Insights
+5) Limitations
+6) Next Steps
+7) Artifacts Index
+"""
+
+class ReportingAgent(Agent):
+    name = "reporting"
+
+    def run(self, ctx: Dict[str, Any]) -> str:
+        cfg = ctx["cfg"]
+        store = ctx["store"]
+        logger = ctx["logger"]
+        evidence_store = ctx["evidence"]
+
+        plan = ctx["memory"].get("result.intake")
+        profile = ctx["memory"].get("result.profiling")
+        qa = ctx["memory"].get("result.quality")
+        eda = ctx["memory"].get("result.eda")
+
+        evidence_map = {
+            ev_id: {
+                "kind": ev.kind,
+                "artifact_path": ev.artifact_path,
+                "pointer": ev.pointer,
+                "summary": ev.summary,
+            }
+            for ev_id, ev in evidence_store.all().items()
+        }
+
+        artifacts_context = {
+            "analysis_plan": plan,
+            "data_profile": profile,
+            "quality_report": qa,
+            "eda_summary": eda,
+            "evidence_map": evidence_map,
+        }
+
+        client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": "Generate the report now."},
+            {"role": "user", "content": "Artifacts Context (JSON):\n" + json.dumps(artifacts_context, indent=2)},
+        ]
+
+        logger.info("[OpenRouter] Calling LLM for report generation...")
+        report_md = client.chat(
+            model=cfg.llm.model,
+            messages=messages,
+            temperature=cfg.llm.temperature,
+            max_tokens=cfg.llm.max_tokens,
+        )
+        logger.info("[OpenRouter] Report generated.")
+
+        store.write_text("final_report.md", report_md)
+        return report_md

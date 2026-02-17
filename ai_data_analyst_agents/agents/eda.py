@@ -1,31 +1,45 @@
 from __future__ import annotations
-
-from typing import Any
+from typing import Any, Dict
 import pandas as pd
-import matplotlib.pyplot as plt
+from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.tools.plotting_tools import save_histogram, save_bar_top_categories
 
+class EDAAgent(Agent):
+    name = "eda"
 
-def run_eda(cfg, df: pd.DataFrame, store, logger) -> dict[str, Any]:
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    summary = {
-        "numeric_columns": numeric_cols,
-        "describe": {},
-        "charts": [],
-    }
+    def run(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = ctx["cfg"]
+        store = ctx["store"]
+        logger = ctx["logger"]
 
-    if numeric_cols:
-        desc = df[numeric_cols].describe().to_dict()
-        summary["describe"] = desc
+        df: pd.DataFrame = ctx["memory"].get("df.cleaned", ctx["df"])
+        charts_dir = store.run_dir / "charts"
 
-        # Basic hist for first numeric col
-        col = numeric_cols[0]
-        plt.figure()
-        df[col].dropna().hist()
-        out = store.run_dir / "charts" / f"hist_{col}.png"
-        plt.savefig(out, bbox_inches="tight")
-        plt.close()
-        summary["charts"].append(str(out.name))
+        numeric_cols = df.select_dtypes(include="number").columns.tolist()
+        cat_cols = [c for c in df.columns if df[c].dtype == "object" or str(df[c].dtype).startswith("string")]
 
-    store.write_json("eda_summary.json", summary)
-    logger.info("Wrote eda_summary.json")
-    return summary
+        charts = []
+
+        for col in numeric_cols[:3]:
+            name = save_histogram(df, col, charts_dir)
+            if name:
+                charts.append(name)
+
+        for col in cat_cols:
+            nunique = int(df[col].nunique(dropna=True))
+            if 1 < nunique <= cfg.eda.max_unique_for_category:
+                name = save_bar_top_categories(df, col, charts_dir, top_k=15)
+                if name:
+                    charts.append(name)
+            if len(charts) >= cfg.eda.max_plots:
+                break
+
+        summary = {
+            "numeric_columns": numeric_cols,
+            "categorical_candidates": cat_cols,
+            "charts": charts,
+        }
+
+        store.write_json("eda_summary.json", summary)
+        logger.info("Wrote eda_summary.json")
+        return summary
