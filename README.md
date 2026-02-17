@@ -26,6 +26,110 @@ Every claim in the final report must reference a computed artifact (table, metri
 
 ------------------------------------------------------------------------
 
+# 🚀 Running AI Data Analyst Agents (Local Setup)
+
+## 1️⃣ Clone the Repository
+
+``` bash
+git clone https://github.com/Priyanshsarvaiya/ai-data-analyst-agents.git
+cd ai-data-analyst-agents
+```
+
+------------------------------------------------------------------------
+
+## 2️⃣ Create a Virtual Environment
+
+### macOS / Linux
+
+``` bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### Windows
+
+``` bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+------------------------------------------------------------------------
+
+## 3️⃣ Install Dependencies
+
+``` bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+------------------------------------------------------------------------
+
+## 4️⃣ Configure Environment Variables
+
+Create a `.env` file in the project root:
+
+``` bash
+cp .env.example .env
+```
+
+Edit `.env` and add your OpenRouter API key and model:
+
+``` env
+OPENROUTER_API_KEY=your_key_here
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_SITE_URL=http://localhost
+OPENROUTER_APP_NAME=ai-data-analyst-agents
+
+ENV=local
+ARTIFACTS_DIR=artifacts
+LOG_LEVEL=INFO
+```
+
+------------------------------------------------------------------------
+
+## 5️⃣ Add Your Dataset
+
+Place your CSV file inside the `data/` folder:
+
+    ai-data-analyst-agents/
+      data/
+        your_dataset.csv
+
+------------------------------------------------------------------------
+
+## 6️⃣ Run the Analysis Pipeline
+
+``` bash
+python -m ai_data_analyst_agents.pipelines.run_csv_pipeline   --file data/your_dataset.csv   --question "What insights can we derive from this dataset?"
+```
+
+------------------------------------------------------------------------
+
+## 7️⃣ View Results
+
+After execution, a new folder will be created inside:
+
+    artifacts/
+      run_YYYYMMDD_HHMMSS/
+
+Inside you will find:
+
+-   analysis_plan.json
+-   data_profile.json
+-   quality_report.json
+-   quality_warnings.md
+-   cleaned.csv
+-   feature_log.json
+-   eda_summary.json
+-   charts/
+-   final_report.md
+-   review_log.json
+-   logs.txt
+
+Open `final_report.md` to see the generated analysis report.
+
+------------------------------------------------------------------------
+
 ## 🎯 Design Philosophy
 
 This project is built around 5 principles:
@@ -423,15 +527,15 @@ For questions, issues, or suggestions:
 ## 🗺️ Roadmap
 
 ### 🟢 Phase 1 – MVP: End-to-End CSV Analytics Pipeline
-- [ ] Implement CSV ingestion pipeline
-- [ ] Add Intake (Scoping) Agent
-- [ ] Implement Data Profiling Agent
-- [ ] Implement Data Quality validation checks
-- [ ] Build Data Cleaning & Feature Engineering Agent
-- [ ] Generate automated EDA charts
-- [ ] Auto-generate structured Markdown report
-- [ ] Enforce artifact-based reporting (no unsupported claims)
-- [ ] One-command pipeline execution → `/artifacts/` folder output
+- [✅] Implement CSV ingestion pipeline
+- [✅] Add Intake (Scoping) Agent
+- [✅] Implement Data Profiling Agent
+- [✅] Implement Data Quality validation checks
+- [✅] Build Data Cleaning & Feature Engineering Agent
+- [✅] Generate automated EDA charts
+- [✅] Auto-generate structured Markdown report
+- [✅] Enforce artifact-based reporting (no unsupported claims)
+- [✅] One-command pipeline execution → `/artifacts/` folder output
 
 ---
 

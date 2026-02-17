@@ -1,0 +1,21 @@
+# Core Data Processing
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Visualization
+matplotlib>=3.8.0
+
+# Config & Validation
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+pyyaml>=6.0.1
+
+# HTTP (OpenRouter API)
+httpx>=0.27.0
+
+# CLI / Logging Enhancements
+rich>=13.7.0
+
+# Dev / Testing (optional but recommended)
+pytest>=8.0.0
+ruff>=0.4.0

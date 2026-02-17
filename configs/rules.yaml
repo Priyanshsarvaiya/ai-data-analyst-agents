@@ -1,0 +1,19 @@
+reporting:
+  artifact_first: true
+  claim_requires_evidence: true
+  evidence_types: [table, chart, metric, query_result]
+
+guardrails:
+  forbid_uncomputed_numbers: true
+  require_sources_in_report: true
+  allow_assumptions_section: true
+
+default_report_sections:
+  - Executive Summary
+  - Dataset Overview
+  - Data Quality Findings
+  - Key Metrics & Trends
+  - Segment Insights
+  - Limitations
+  - Next Steps
+  - Artifacts Index

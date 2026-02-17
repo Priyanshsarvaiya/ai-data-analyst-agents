@@ -1,0 +1,87 @@
+# ===============================
+# Python
+# ===============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.env
+
+
+# ===============================
+# IDE / Editor
+# ===============================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ===============================
+# Logs
+# ===============================
+*.log
+logs/
+artifacts/**/logs.txt
+
+# ===============================
+# Runtime Artifacts (VERY IMPORTANT)
+# ===============================
+artifacts/
+!artifacts/.gitkeep
+
+# Charts & generated outputs
+**/charts/
+*.png
+*.jpg
+*.jpeg
+*.svg
+
+# Generated data outputs
+*.csv
+*.parquet
+*.feather
+
+# ===============================
+# Testing / Coverage
+# ===============================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ===============================
+# Jupyter
+# ===============================
+.ipynb_checkpoints/
+
+# ===============================
+# OS Files
+# ===============================
+Thumbs.db
+Desktop.ini
+
+# ===============================
+# Local config overrides
+# ===============================
+configs/local.yaml
+configs/secrets.yaml
+
+# ===============================
+# UV / Poetry / other tooling
+# ===============================
+.uv/
+poetry.lock
