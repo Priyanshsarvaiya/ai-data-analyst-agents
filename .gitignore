@@ -41,7 +41,10 @@ artifacts/**/logs.txt
 # ===============================
 # Runtime Artifacts (VERY IMPORTANT)
 # ===============================
-artifacts/
+# Ignore everything inside artifacts
+artifacts/*
+
+# But keep the folder itself
 !artifacts/.gitkeep
 
 # Charts & generated outputs
@@ -50,6 +53,12 @@ artifacts/
 *.jpg
 *.jpeg
 *.svg
+
+# Ignore generated data files everywhere
+*.csv
+
+# BUT allow CSV files inside data folder
+!data/*.csv
 
 # Generated data outputs
 *.csv
