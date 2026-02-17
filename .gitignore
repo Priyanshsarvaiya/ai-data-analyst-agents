@@ -61,7 +61,6 @@ artifacts/*
 !data/*.csv
 
 # Generated data outputs
-*.csv
 *.parquet
 *.feather
 
