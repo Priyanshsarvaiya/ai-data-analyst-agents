@@ -214,115 +214,134 @@ ai-data-analyst-agents/
 
 # 🗺️ Development Roadmap
 
-⸻
+---
 
-🧭 Phase-by-Phase Implementation Plan
+## 🧭 Phase-by-Phase Implementation Plan
 
-⸻
+---
 
-🟢 Phase 1 – MVP (Single CSV, Single Pipeline)
+## 🟢 Phase 1 – MVP (Single CSV, Single Pipeline)
 
-Goal: Fully automated CSV → Report system
+### 🎯 Goal
+Build a fully automated **CSV → Report** analytics system.
 
-Deliverables:
-	•	CSV ingestion
-	•	Data profiling
-	•	Data quality checks
-	•	Basic EDA charts
-	•	Auto-generated report
-	•	Artifact validation
+### 📦 Deliverables
+- CSV ingestion pipeline
+- Data Profiling Agent
+- Data Quality validation checks
+- Basic EDA visualizations
+- Auto-generated Markdown report
+- Artifact validation system
 
-Success Criteria:
-	•	One command produces full /artifacts/ folder
-	•	Report references real computed values
+### ✅ Success Criteria
+- One command produces a complete `/artifacts/` folder
+- Report references only real computed values
+- No unsupported claims in insights
 
-⸻
+---
 
-🟡 Phase 2 – Structured Multi-Agent Orchestration
+## 🟡 Phase 2 – Structured Multi-Agent Orchestration
 
-Goal: True agent collaboration
+### 🎯 Goal
+Enable true multi-agent collaboration with modular architecture.
 
-Add:
-	•	Agent communication layer
-	•	Shared memory
-	•	Task planner agent
-	•	Evidence linking system
-	•	Reviewer guardrail
+### ➕ Add
+- Agent communication layer
+- Shared memory system
+- Task Planner Agent
+- Evidence-linking system
+- Reviewer / Guardrail Agent
 
-Success Criteria:
-	•	Agents operate modularly
-	•	Claims validated against artifacts
+### ✅ Success Criteria
+- Agents operate independently but collaboratively
+- Claims are validated against artifacts
+- Pipeline remains modular and extensible
 
-⸻
+---
 
-🟠 Phase 3 – SQL + Business Context Support
+## 🟠 Phase 3 – SQL + Business Context Support
 
-Goal: Real-world analytics workflows
+### 🎯 Goal
+Support real-world analytics workflows with structured databases.
 
-Add:
-	•	SQL query generation
-	•	Schema-aware query planner
-	•	Join reasoning
-	•	KPI template library
-	•	Business metric definitions
+### ➕ Add
+- SQL query generation
+- Schema-aware query planner
+- Join reasoning logic
+- KPI template library (SaaS, Ecommerce, Marketing, etc.)
+- Business metric definition engine
 
-Success Criteria:
-	•	Analyze multi-table datasets
-	•	Produce stakeholder-style summaries
+### ✅ Success Criteria
+- Multi-table datasets can be analyzed
+- Stakeholder-style executive summaries generated
+- Business metrics computed consistently
 
-⸻
+---
 
-🔵 Phase 4 – Statistical Intelligence Layer
+## 🔵 Phase 4 – Statistical Intelligence Layer
 
-Goal: Add statistical rigor
+### 🎯 Goal
+Introduce statistical rigor and experiment evaluation.
 
-Add:
-	•	Hypothesis testing
-	•	Confidence intervals
-	•	Effect size estimation
-	•	Basic regression models
-	•	A/B testing module
+### ➕ Add
+- Hypothesis testing module
+- Confidence interval computation
+- Effect size estimation
+- Basic regression models (OLS)
+- A/B testing workflow
 
-Success Criteria:
-	•	Stat claims always include assumptions
-	•	No fake significance
+### ✅ Success Criteria
+- All statistical claims include assumptions
+- No false or exaggerated significance
+- Statistical limitations explicitly documented in reports
 
-⸻
+---
 
-🟣 Phase 5 – Dashboard + Interactive Mode
+## 🟣 Phase 5 – Dashboard + Interactive Mode
 
-Goal: Human-agent collaboration
+### 🎯 Goal
+Enable human-agent collaboration and interactive refinement.
 
-Add:
-	•	Streamlit interface
-	•	Interactive Q&A over artifacts
-	•	Editable report sections
-	•	Chart customization
-	•	Agent monitoring panel
+### ➕ Add
+- Streamlit web interface
+- Interactive artifact viewer
+- Follow-up Q&A over computed artifacts
+- Editable report sections
+- Chart customization
+- Agent monitoring panel
 
-Success Criteria:
-	•	Analysts can refine output
-	•	Stakeholders can ask follow-up questions
+### ✅ Success Criteria
+- Analysts can refine and adjust output
+- Stakeholders can ask follow-up questions
+- Interactive insights remain artifact-grounded
 
-⸻
+---
 
-🔴 Phase 6 – Advanced Features
-	•	Auto anomaly detection
-	•	Drift monitoring
-	•	Scheduled report generation
-	•	Model-based forecasting
-	•	Cloud deployment
-	•	Multi-user support
-	•	Audit logs
+## 🔴 Phase 6 – Advanced & Production Features
 
-⸻
+### ➕ Add
+- Automated anomaly detection
+- Data drift monitoring
+- Scheduled report generation
+- Model-based forecasting
+- Cloud deployment support
+- Multi-user authentication & access control
+- Full audit logs for reproducibility
 
-🧪 Testing Strategy
-	•	Unit tests for quality checks
-	•	Snapshot tests for reports
-	•	Schema validation tests
-	•	Artifact validation tests
-	•	Regression tests on known datasets
+---
+
+# 🧪 Testing Strategy
+
+- Unit tests for data quality checks
+- Snapshot tests for report consistency
+- Schema validation tests
+- Artifact-reference validation tests
+- Regression tests on benchmark datasets
+- End-to-end pipeline tests
+
+---
+
+🚀 *From raw data to defensible decisions — systematically and reproducibly.*
 
 ------------------------------------------------------------------------
 
