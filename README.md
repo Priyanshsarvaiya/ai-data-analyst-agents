@@ -154,32 +154,30 @@ final_report = insights.generate_insights(analysis, charts)
 
 ```
 ai-data-analyst-agents/
-│
-├── agents/                 # Agent implementations
-│   ├── base_agent.py
-│   ├── data_collector.py
-│   ├── data_cleaner.py
-│   ├── data_analyzer.py
-│   ├── visualizer.py
-│   └── insights_agent.py
-│
-├── utils/                  # Utility functions
-│   ├── data_utils.py
-│   ├── visualization_utils.py
-│   └── report_generator.py
-│
-├── config/                 # Configuration files
-│   └── settings.py
-│
-├── examples/              # Example scripts and notebooks
-│   └── basic_analysis.py
-│
-├── tests/                 # Unit tests
-│   └── test_agents.py
-│
-├── requirements.txt       # Project dependencies
-├── .env.example          # Environment variables template
-└── README.md             # This file
+  README.md
+  app/                    # Streamlit / web UI
+  agents/
+    intake.py
+    profiling.py
+    quality.py
+    wrangling.py
+    eda.py
+    stats.py
+    reporting.py
+    reviewer.py
+  tools/
+    pandas_tools.py
+    plotting_tools.py
+    sql_tools.py
+    validation_tools.py
+  pipelines/
+    run_csv_pipeline.py
+  artifacts/
+    (generated outputs)
+  tests/
+    test_quality_checks.py
+  configs/
+    rules.yaml            # guardrails, KPI templates
 ```
 
 ## 🤝 Contributing
