@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import warnings
 
 
 
@@ -70,7 +71,9 @@ def detect_probable_datetime_columns(df: pd.DataFrame, max_try: int = 2000) -> L
         if not (pd.api.types.is_object_dtype(s) or pd.api.types.is_string_dtype(s)):
             continue
 
-        parsed = pd.to_datetime(s.astype(str), errors="coerce", utc=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            parsed = pd.to_datetime(s.astype(str), errors="coerce", utc=False)
 
         total = int(s.shape[0])
         if total == 0:

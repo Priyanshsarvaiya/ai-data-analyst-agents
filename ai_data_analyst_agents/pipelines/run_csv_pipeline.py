@@ -19,6 +19,8 @@ from ai_data_analyst_agents.agents.profiling import ProfilingAgent
 from ai_data_analyst_agents.agents.quality import QualityAgent
 from ai_data_analyst_agents.agents.wrangling import WranglingAgent
 from ai_data_analyst_agents.agents.eda import EDAAgent
+from ai_data_analyst_agents.agents.planner import PlannerAgent
+from ai_data_analyst_agents.agents.metrics import MetricsAgent
 from ai_data_analyst_agents.agents.reporting import ReportingAgent
 from ai_data_analyst_agents.agents.reviewer import ReviewerAgent
 
@@ -46,24 +48,42 @@ def run_pipeline(file_path: str, business_question: str) -> Path:
         "evidence": evidence,
     }
 
+    # ✅ Agent registry (planner + metrics included)
     agents = {
         "intake": IntakeAgent(),
         "profiling": ProfilingAgent(),
         "quality": QualityAgent(),
         "wrangling": WranglingAgent(),
         "eda": EDAAgent(),
+        "planner": PlannerAgent(),
+        "metrics": MetricsAgent(),
         "reporting": ReportingAgent(),
         "reviewer": ReviewerAgent(),
     }
 
     tasks = default_tasks_phase2()
     orch = Orchestrator(agents=agents, logger=logger)
-    results = orch.run(tasks, ctx)
 
-    # Save a manifest including evidence map
+    try:
+        results = orch.run(tasks, ctx)
+    except Exception:
+        # Ensure a failing run still leaves a trace in artifacts/logs
+        logger.exception("Pipeline failed.")
+        store.write_json(
+            "run_manifest.json",
+            {
+                "status": "failed",
+                "inputs": {"file_path": file_path, "business_question": business_question},
+                "tasks": [{"name": t.name, "reason": t.reason} for t in tasks],
+                "evidence_ids": list(evidence.all().keys()),
+            },
+        )
+        raise
+
     store.write_json(
         "run_manifest.json",
         {
+            "status": "success",
             "inputs": {"file_path": file_path, "business_question": business_question},
             "tasks": [{"name": t.name, "reason": t.reason} for t in tasks],
             "evidence_ids": list(evidence.all().keys()),
@@ -76,8 +96,8 @@ def run_pipeline(file_path: str, business_question: str) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", required=True)
-    parser.add_argument("--question", required=True)
+    parser.add_argument("--file", required=True, help="Path to CSV file (e.g., data/sample.csv)")
+    parser.add_argument("--question", required=True, help="Business question to answer")
     args = parser.parse_args()
 
     run_dir = run_pipeline(args.file, args.question)
