@@ -5,6 +5,7 @@ import re
 
 from ai_data_analyst_agents.core.agent_base import Agent
 from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
+from ai_data_analyst_agents.core.security import redact_payload_for_llm
 
 SYSTEM_PROMPT = """You are a strict, evidence-grounded data analyst.
 
@@ -602,16 +603,29 @@ class ReportingAgent(Agent):
 
         # Include actual artifact payloads so the report can state concrete answers.
         evidence_payloads: Dict[str, Any] = {}
+        allow_raw_rows = bool(getattr(cfg, "security", None) and cfg.security.allow_raw_rows_to_llm)
+        max_rows_to_llm = int(getattr(getattr(cfg, "security", None), "max_rows_to_llm", 25))
         for ev_id, ev in evidence_store.all().items():
             payload = None
             if ev.artifact_path and ev.artifact_path.endswith(".json"):
                 payload = _safe_read_json(store.path(ev.artifact_path))
+            safe_payload = redact_payload_for_llm(
+                payload,
+                allow_raw_rows=allow_raw_rows,
+                max_rows=max_rows_to_llm,
+            ) if payload is not None else None
+            pointer_value = _pointer_value(payload, ev.pointer)
+            safe_pointer_value = redact_payload_for_llm(
+                pointer_value,
+                allow_raw_rows=allow_raw_rows,
+                max_rows=max_rows_to_llm,
+            )
             evidence_payloads[ev_id] = {
                 "artifact_path": ev.artifact_path,
                 "pointer": ev.pointer,
                 "summary": ev.summary,
-                "pointer_value": _pointer_value(payload, ev.pointer),
-                "payload": _compact_json(payload) if payload is not None else None,
+                "pointer_value": safe_pointer_value,
+                "payload": _compact_json(safe_payload) if safe_payload is not None else None,
             }
 
         computed_facts: list[str] = []
@@ -622,6 +636,11 @@ class ReportingAgent(Agent):
             payload = _safe_read_json(store.path(str(artifact)))
             if payload is None:
                 continue
+            payload = redact_payload_for_llm(
+                payload,
+                allow_raw_rows=allow_raw_rows,
+                max_rows=max_rows_to_llm,
+            )
             tid = str(item.get("task_id", "T?"))
             if isinstance(payload, dict) and "filter" in payload and "value" in payload:
                 computed_facts.append(

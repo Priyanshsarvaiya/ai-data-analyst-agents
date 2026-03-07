@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from ai_data_analyst_agents.core.security import sanitize_user_error_message
 from ai_data_analyst_agents.core.sql_source import SQLDataSource, choose_primary_table
 from ai_data_analyst_agents.pipelines.run_csv_pipeline import run_pipeline as run_csv_pipeline
 from ai_data_analyst_agents.pipelines.run_sql_pipeline import run_pipeline as run_sql_pipeline
@@ -227,7 +228,7 @@ with col_right:
                         base_table=base_table.strip() or None,
                     )
         except Exception as e:
-            st.error(f"Pipeline failed: {e}")
+            st.error(f"Pipeline failed: {sanitize_user_error_message(e)}")
             st.stop()
 
         st.success(f"Done. Run folder: {run_dir}")

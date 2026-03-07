@@ -6,6 +6,7 @@ from collections import deque
 import re
 
 import pandas as pd
+from ai_data_analyst_agents.core.security import clamp_positive_limit, validate_read_only_sql
 
 try:
     from sqlalchemy import create_engine, inspect, text
@@ -41,6 +42,8 @@ def _sanitize_alias(name: str) -> str:
 class SQLDataSource:
     db_url: str
     timeout_s: int = 30
+    max_query_rows: int = 50000
+    enforce_read_only_sql: bool = True
 
     def __post_init__(self) -> None:
         if create_engine is None:
@@ -48,6 +51,19 @@ class SQLDataSource:
                 "sqlalchemy is required for SQL data sources. Install with `pip install sqlalchemy psycopg[binary]`."
             )
         self.engine = create_engine(self.db_url, pool_pre_ping=True, pool_recycle=3600)
+
+    def _apply_session_safety(self, conn: Any) -> None:
+        try:
+            dialect = str(self.engine.dialect.name).lower()
+            if dialect == "sqlite":
+                conn.execute(text("PRAGMA query_only = ON"))
+            elif dialect.startswith("postgresql"):
+                timeout_ms = max(1000, int(self.timeout_s * 1000))
+                conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                conn.execute(text("SET LOCAL default_transaction_read_only = on"))
+        except Exception:
+            # Best effort hardening; query-level validation still blocks write SQL.
+            pass
 
     def inspect_schema(
         self,
@@ -123,24 +139,27 @@ class SQLDataSource:
         }
 
     def execute_query(self, query: str, limit: Optional[int] = None) -> pd.DataFrame:
-        q = (query or "").strip().rstrip(";")
-        if not q:
-            raise ValueError("Empty SQL query.")
+        q = (query or "").strip()
+        if self.enforce_read_only_sql:
+            q = validate_read_only_sql(q)
+        else:
+            q = q.rstrip(";").strip()
+            if not q:
+                raise ValueError("Empty SQL query.")
 
-        final_query = q
-        if limit is not None and limit > 0:
-            final_query = f"SELECT * FROM ({q}) AS _q LIMIT {int(limit)}"
+        safe_limit = clamp_positive_limit(limit, max_limit=self.max_query_rows)
+        final_query = f"SELECT * FROM ({q}) AS _q LIMIT {safe_limit}"
 
         with self.engine.connect() as conn:
+            self._apply_session_safety(conn)
             return pd.read_sql_query(text(final_query), conn)
 
     def load_table(self, table_name: str, limit: Optional[int] = None) -> pd.DataFrame:
         q_table = _quote_table(self.engine, table_name)
-        if limit is None or limit <= 0:
-            query = f"SELECT * FROM {q_table}"
-        else:
-            query = f"SELECT * FROM {q_table} LIMIT {int(limit)}"
+        safe_limit = clamp_positive_limit(limit, max_limit=self.max_query_rows)
+        query = f"SELECT * FROM {q_table} LIMIT {safe_limit}"
         with self.engine.connect() as conn:
+            self._apply_session_safety(conn)
             return pd.read_sql_query(text(query), conn)
 
 

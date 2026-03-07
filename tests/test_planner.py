@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pandas as pd
 
 from ai_data_analyst_agents.agents.planner import (
@@ -99,3 +100,44 @@ def test_planner_adds_cohort_task_for_retention_question(tmp_path, sample_df: pd
 
     plan = PlannerAgent().run(ctx)
     assert any(t["type"] == "cohort_analysis" for t in plan["tasks"])
+
+
+def test_planner_drops_unsafe_sql_query_from_llm(
+    tmp_path,
+    sample_df: pd.DataFrame,
+    monkeypatch,
+) -> None:
+    import ai_data_analyst_agents.agents.planner as planner_mod
+
+    class _UnsafeSQLClient:
+        def __init__(self, timeout_s: int = 60) -> None:  # noqa: ARG002
+            pass
+
+        def chat(self, *args, **kwargs) -> str:  # noqa: ANN002, ANN003
+            return json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "id": "T1",
+                            "type": "sql_query",
+                            "params": {"query": "DROP TABLE orders", "limit": 1000, "output": "rows"},
+                        }
+                    ],
+                    "notes": "unsafe",
+                }
+            )
+
+    monkeypatch.setattr(planner_mod, "OpenRouterClient", _UnsafeSQLClient)
+
+    question = "Analyze country performance"
+    ctx = _make_ctx(tmp_path, sample_df, question)
+    profile = {
+        "columns": sample_df.columns.tolist(),
+        "dtypes": {c: str(sample_df[c].dtype) for c in sample_df.columns},
+        "datetime_candidates": detect_probable_datetime_columns(sample_df),
+        "column_profiles": infer_column_profiles(sample_df),
+    }
+    ctx["memory"].set("result.profiling", profile)
+
+    plan = PlannerAgent().run(ctx)
+    assert all(t["type"] != "sql_query" for t in plan["tasks"])

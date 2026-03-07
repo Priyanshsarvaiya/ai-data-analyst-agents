@@ -24,3 +24,9 @@ sql:
   introspection_max_tables: 200
   preview_rows: 10000
   include_row_counts: true
+
+security:
+  enforce_read_only_sql: true
+  allow_raw_rows_to_llm: false
+  max_rows_to_llm: 25
+  user_error_max_chars: 400

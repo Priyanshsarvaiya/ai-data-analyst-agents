@@ -11,6 +11,7 @@ from ai_data_analyst_agents.core.metric_engine import (
     compute_segment_profile,
     compute_template_kpis,
 )
+from ai_data_analyst_agents.core.security import validate_read_only_sql
 from ai_data_analyst_agents.core.sql_source import compute_join_profile
 
 
@@ -644,6 +645,10 @@ class MetricsAgent(Agent):
                         continue
 
                     query = str(p["query"])
+                    if getattr(cfg, "security", None) is not None and cfg.security.enforce_read_only_sql:
+                        query = validate_read_only_sql(query)
+                    else:
+                        query = query.strip().rstrip(";")
                     limit = int(p.get("limit", cfg.sql.default_query_row_limit))
                     output_mode = str(p.get("output", "rows")).lower()
 

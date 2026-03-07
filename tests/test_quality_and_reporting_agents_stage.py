@@ -137,3 +137,47 @@ def test_reporting_agent_works_without_computed_metrics(
     report = ReportingAgent().run(ctx)
     assert "## 5) Analysis Outputs" in report
     assert "Not computed in artifacts." in report or "Failed tasks:" in report
+
+
+def test_reporting_agent_redacts_raw_sql_rows_in_llm_context(
+    agent_ctx_factory,
+    tmp_path,
+    sample_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_data_analyst_agents.agents.reporting as reporting_mod
+
+    captured: dict[str, Any] = {}
+
+    class _CaptureClient:
+        def __init__(self, timeout_s: int = 60) -> None:  # noqa: ARG002
+            pass
+
+        def chat(self, *args, **kwargs) -> str:  # noqa: ANN002, ANN003
+            captured["messages"] = kwargs.get("messages", [])
+            return ""
+
+    monkeypatch.setattr(reporting_mod, "OpenRouterClient", _CaptureClient)
+    question = "Summarize SQL results"
+    ctx = agent_ctx_factory(tmp_path, df=sample_df, question=question, include_cfg=True)
+    _prepare_reporting_ctx(ctx, question, with_metrics=False)
+
+    artifact = "T_sql_rows.json"
+    ctx["store"].write_json(
+        artifact,
+        {
+            "columns": ["customer_email"],
+            "rows": [{"customer_email": "very-secret-value"}],
+            "n_rows": 1,
+        },
+    )
+    ev = ctx["evidence"].add("json", artifact, "sql rows", pointer=None)
+    ctx["memory"].set(
+        "result.metrics",
+        {"computed": [{"task_id": "T1", "artifact": artifact, "evidence_id": ev.id}], "failed": [], "skipped": []},
+    )
+
+    ReportingAgent().run(ctx)
+    msg = str(captured["messages"])
+    assert "very-secret-value" not in msg
+    assert "REDACTED(1 rows)" in msg

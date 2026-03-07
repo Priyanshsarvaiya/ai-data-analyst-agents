@@ -40,12 +40,20 @@ class SQLCfg(BaseModel):
     include_row_counts: bool = True
 
 
+class SecurityCfg(BaseModel):
+    enforce_read_only_sql: bool = True
+    allow_raw_rows_to_llm: bool = False
+    max_rows_to_llm: int = 25
+    user_error_max_chars: int = 400
+
+
 class AppCfg(BaseModel):
     runtime: RuntimeCfg = Field(default_factory=RuntimeCfg)
     llm: LlmCfg = Field(default_factory=LlmCfg)
     qa: QACfg = Field(default_factory=QACfg)
     eda: EDACfg = Field(default_factory=EDACfg)
     sql: SQLCfg = Field(default_factory=SQLCfg)
+    security: SecurityCfg = Field(default_factory=SecurityCfg)
 
 
 class EnvSettings(BaseSettings):
@@ -60,6 +68,10 @@ class EnvSettings(BaseSettings):
     SQL_DEFAULT_QUERY_ROW_LIMIT: Optional[int] = None
     SQL_INTROSPECTION_MAX_TABLES: Optional[int] = None
     SQL_PREVIEW_ROWS: Optional[int] = None
+    SECURITY_ENFORCE_READ_ONLY_SQL: Optional[bool] = None
+    SECURITY_ALLOW_RAW_ROWS_TO_LLM: Optional[bool] = None
+    SECURITY_MAX_ROWS_TO_LLM: Optional[int] = None
+    SECURITY_USER_ERROR_MAX_CHARS: Optional[int] = None
 
     class Config:
         env_file = ".env"
@@ -84,4 +96,12 @@ def load_app_cfg(path: str | Path = "configs/settings.yaml") -> AppCfg:
         cfg.sql.introspection_max_tables = int(env.SQL_INTROSPECTION_MAX_TABLES)
     if env.SQL_PREVIEW_ROWS is not None:
         cfg.sql.preview_rows = int(env.SQL_PREVIEW_ROWS)
+    if env.SECURITY_ENFORCE_READ_ONLY_SQL is not None:
+        cfg.security.enforce_read_only_sql = bool(env.SECURITY_ENFORCE_READ_ONLY_SQL)
+    if env.SECURITY_ALLOW_RAW_ROWS_TO_LLM is not None:
+        cfg.security.allow_raw_rows_to_llm = bool(env.SECURITY_ALLOW_RAW_ROWS_TO_LLM)
+    if env.SECURITY_MAX_ROWS_TO_LLM is not None:
+        cfg.security.max_rows_to_llm = int(env.SECURITY_MAX_ROWS_TO_LLM)
+    if env.SECURITY_USER_ERROR_MAX_CHARS is not None:
+        cfg.security.user_error_max_chars = int(env.SECURITY_USER_ERROR_MAX_CHARS)
     return cfg

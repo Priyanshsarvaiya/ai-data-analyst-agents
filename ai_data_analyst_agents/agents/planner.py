@@ -10,6 +10,7 @@ from ai_data_analyst_agents.core.kpi_templates import (
     pick_cohort_columns,
 )
 from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
+from ai_data_analyst_agents.core.security import validate_read_only_sql
 from ai_data_analyst_agents.core.sql_source import (
     build_groupby_query,
     choose_primary_table,
@@ -322,6 +323,10 @@ def _sanitize_and_number_tasks(
         elif ttype == "sql_query":
             query = str(p.get("query", "")).strip()
             if not query:
+                continue
+            try:
+                p["query"] = validate_read_only_sql(query)
+            except Exception:
                 continue
             p.setdefault("limit", 1000)
             p.setdefault("output", "rows")

@@ -41,7 +41,12 @@ def run_pipeline(
     logger.info(f"Run dir: {store.run_dir}")
     logger.info("Loading SQL source.")
 
-    sql_source = SQLDataSource(db_url=db_url, timeout_s=cfg.llm.timeout_s)
+    sql_source = SQLDataSource(
+        db_url=db_url,
+        timeout_s=cfg.llm.timeout_s,
+        max_query_rows=cfg.sql.default_query_row_limit,
+        enforce_read_only_sql=cfg.security.enforce_read_only_sql,
+    )
     schema = sql_source.inspect_schema(
         include_row_counts=cfg.sql.include_row_counts,
         max_tables=cfg.sql.introspection_max_tables,
