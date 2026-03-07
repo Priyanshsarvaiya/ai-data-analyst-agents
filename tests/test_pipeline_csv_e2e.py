@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 from pathlib import Path
 import re
 
@@ -8,12 +6,7 @@ import pandas as pd
 import pytest
 
 from ai_data_analyst_agents.pipelines.run_csv_pipeline import run_pipeline
-
-
-def _latest_run_dir(artifacts_root: Path) -> Path:
-    runs = sorted([p for p in artifacts_root.glob("run_*") if p.is_dir()])
-    assert runs, f"No run directories found under {artifacts_root}"
-    return runs[-1]
+from tests.helpers import assert_artifacts_exist, latest_run_dir, read_json
 
 
 def test_csv_pipeline_end_to_end_outputs(
@@ -38,8 +31,7 @@ def test_csv_pipeline_end_to_end_outputs(
         "agent_messages.json",
         "run_manifest.json",
     ]
-    for name in expected_files:
-        assert (run_dir / name).exists(), f"Missing artifact: {name}"
+    assert_artifacts_exist(run_dir, expected_files)
 
     report = (run_dir / "final_report.md").read_text(encoding="utf-8")
     for section in [
@@ -51,10 +43,10 @@ def test_csv_pipeline_end_to_end_outputs(
         assert section in report
     assert re.search(r"\[\[EV:(EV-[a-f0-9]{10})\]\]", report)
 
-    review = json.loads((run_dir / "review_log.json").read_text(encoding="utf-8"))
+    review = read_json(run_dir / "review_log.json")
     assert review["status"] in {"pass", "warn"}
 
-    metrics = json.loads((run_dir / "metrics_outputs.json").read_text(encoding="utf-8"))
+    metrics = read_json(run_dir / "metrics_outputs.json")
     for item in metrics.get("computed", []):
         assert (run_dir / item["artifact"]).exists()
 
@@ -138,7 +130,7 @@ def test_csv_pipeline_writes_failed_manifest_when_stage_breaks(
     with pytest.raises(RuntimeError, match="forced-metrics-failure"):
         run_pipeline(str(sample_csv_path), "Why did India have less revenue?")
 
-    run_dir = _latest_run_dir(patch_pipeline_cfg)
-    manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    run_dir = latest_run_dir(patch_pipeline_cfg)
+    manifest = read_json(run_dir / "run_manifest.json")
     assert manifest["status"] == "failed"
     assert (run_dir / "agent_messages.json").exists()

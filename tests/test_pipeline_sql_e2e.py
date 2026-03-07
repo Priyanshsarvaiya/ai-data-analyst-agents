@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from ai_data_analyst_agents.pipelines.run_sql_pipeline import _redact_db_url, run_pipeline
+from tests.helpers import assert_artifacts_exist, read_json
 
 
 def test_sql_pipeline_end_to_end(sqlite_star_db, patch_llm, patch_pipeline_cfg: Path) -> None:
@@ -17,12 +17,12 @@ def test_sql_pipeline_end_to_end(sqlite_star_db, patch_llm, patch_pipeline_cfg: 
         )
     )
 
-    assert (run_dir / "db_schema.json").exists()
-    assert (run_dir / "analysis_tasks.json").exists()
-    assert (run_dir / "metrics_outputs.json").exists()
-    assert (run_dir / "final_report.md").exists()
+    assert_artifacts_exist(
+        run_dir,
+        ["db_schema.json", "analysis_tasks.json", "metrics_outputs.json", "final_report.md"],
+    )
 
-    plan = json.loads((run_dir / "analysis_tasks.json").read_text(encoding="utf-8"))
+    plan = read_json(run_dir / "analysis_tasks.json")
     task_types = [t["type"] for t in plan["tasks"]]
     assert "sql_query" in task_types
     assert "sql_join_profile" in task_types

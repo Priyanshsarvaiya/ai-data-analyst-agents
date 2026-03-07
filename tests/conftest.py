@@ -9,6 +9,10 @@ import pandas as pd
 import pytest
 
 from ai_data_analyst_agents.core.settings import load_app_cfg
+from ai_data_analyst_agents.core.artifacts import ArtifactStore
+from ai_data_analyst_agents.core.evidence import EvidenceStore
+from ai_data_analyst_agents.core.logging import setup_logging
+from ai_data_analyst_agents.core.memory import SharedMemory
 
 
 class DummyOpenRouterClient:
@@ -166,3 +170,24 @@ def latest_run_dir(artifacts_root: Path) -> Path:
     if not run_dirs:
         raise AssertionError(f"No run directory found under {artifacts_root}")
     return run_dirs[-1]
+
+
+@pytest.fixture
+def agent_ctx_factory():
+    def _factory(tmp_path: Path, *, df: pd.DataFrame, question: str = "Test question", include_cfg: bool = True):
+        store = ArtifactStore.create(tmp_path / "artifacts")
+        logger = setup_logging("INFO", store.path("logs.txt"))
+        ctx = {
+            "store": store,
+            "logger": logger,
+            "df": df,
+            "business_question": question,
+            "memory": SharedMemory(),
+            "evidence": EvidenceStore(),
+            "source": {"type": "csv"},
+        }
+        if include_cfg:
+            ctx["cfg"] = load_app_cfg()
+        return ctx
+
+    return _factory
