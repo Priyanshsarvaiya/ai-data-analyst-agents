@@ -28,18 +28,16 @@ def default_tasks_phase2() -> List[Task]:
             "Prepare cleaned and analysis-ready dataset with consistent types and derived fields."
         ),
         Task(
-            "eda",
-            "Generate descriptive statistics and exploratory visualizations to understand data patterns."
-        ),
-
-        # Phase 2 – Question-aware intelligence
-        Task(
             "planner",
             "Determine the specific computations, aggregations, and comparisons required to answer the business question."
         ),
         Task(
             "metrics",
             "Execute planned analytical computations, produce metric artifacts, and register evidence references."
+        ),
+        Task(
+            "eda",
+            "Generate question-aware visualizations from computed artifacts and dataset context."
         ),
 
         Task(

@@ -2,211 +2,235 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
-# Import your existing pipeline runner
-from ai_data_analyst_agents.pipelines.run_csv_pipeline import run_pipeline
+from ai_data_analyst_agents.core.sql_source import SQLDataSource, choose_primary_table
+from ai_data_analyst_agents.pipelines.run_csv_pipeline import run_pipeline as run_csv_pipeline
+from ai_data_analyst_agents.pipelines.run_sql_pipeline import run_pipeline as run_sql_pipeline
+
 
 ROOT = Path(__file__).resolve().parents[1]
-os.chdir(ROOT)  # ensures .env and configs/ are found
-
+os.chdir(ROOT)
 
 st.set_page_config(page_title="AI Data Analyst Agents", layout="wide")
+st.title("AI Data Analyst Agents")
+st.caption("Run artifact-grounded analytics on CSV or SQL sources.")
 
-st.title("AI Data Analyst Agents 📊")
-st.caption("Upload a CSV, ask a question, and generate artifact-grounded analytics.")
 
-# ---------- Sidebar ----------
+def safe_read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return path.read_text(errors="ignore")
+
+
+def safe_read_json(path: Path) -> dict:
+    return json.loads(safe_read_text(path))
+
+
 st.sidebar.header("Inputs")
+source_type = st.sidebar.radio("Data source", ["CSV", "SQL"], index=0)
+uploaded = None
+db_url = ""
+base_table = ""
 
-uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+if source_type == "CSV":
+    uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+else:
+    db_url = st.sidebar.text_input(
+        "Database URL",
+        value="sqlite:///data/sample.db",
+        help="Examples: sqlite:///data/my.db or postgresql+psycopg://user:pass@host:5432/dbname",
+    )
+    base_table = st.sidebar.text_input(
+        "Primary table (optional)",
+        value="",
+        help="Optional table for dataframe profiling/wrangling. SQL tasks can still query across tables.",
+    )
+
 question = st.sidebar.text_area(
     "Business question / query",
-    placeholder='e.g., "Why did revenue vary by country?"',
+    placeholder='e.g., "Why is India revenue lower than Germany?"',
     height=120,
 )
-
-run_btn = st.sidebar.button("Run Analysis", type="primary", use_container_width=True)
+run_btn = st.sidebar.button("Run Analysis", type="primary", width="stretch")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### Output")
-st.sidebar.write("Artifacts are saved under your configured `artifacts/` directory.")
+st.sidebar.write("Artifacts are saved under configured `artifacts/`.")
 
-# ---------- Helpers ----------
-def safe_read_text(p: Path) -> str:
-    try:
-        return p.read_text(encoding="utf-8")
-    except Exception:
-        return p.read_text(errors="ignore")
 
-def safe_read_json(p: Path) -> dict:
-    return json.loads(safe_read_text(p))
-
-def find_latest_run_dir(artifacts_root: Path) -> Path | None:
-    if not artifacts_root.exists():
-        return None
-    run_dirs = [d for d in artifacts_root.iterdir() if d.is_dir() and d.name.startswith("run_")]
-    if not run_dirs:
-        return None
-    return sorted(run_dirs, key=lambda d: d.name)[-1]
-
-# ---------- Main ----------
-col_left, col_right = st.columns([1.1, 0.9], gap="large")
+col_left, col_right = st.columns([1.15, 0.85], gap="large")
 
 with col_left:
-    st.subheader("1) Preview")
-    if uploaded is not None:
-        st.success(f"Uploaded: {uploaded.name} ({uploaded.size:,} bytes)")
-        # Show a quick preview
-        import pandas as pd
-        df_preview = pd.read_csv(uploaded)
-        st.dataframe(df_preview.head(20), use_container_width=True)
+    st.subheader("1) Source Preview")
+    if source_type == "CSV":
+        if uploaded is not None:
+            st.success(f"Uploaded: {uploaded.name} ({uploaded.size:,} bytes)")
+            df_preview = pd.read_csv(uploaded)
+            st.dataframe(df_preview.head(20), width="stretch")
+        else:
+            st.info("Upload a CSV to preview.")
     else:
-        st.info("Upload a CSV to begin.")
+        if db_url.strip():
+            try:
+                sql_source = SQLDataSource(db_url.strip())
+                schema = sql_source.inspect_schema(include_row_counts=False, max_tables=100)
+                tables = [t.get("name") for t in schema.get("tables", []) if t.get("name")]
+                st.write(f"Detected tables: {len(tables)}")
+                if tables:
+                    selected = base_table.strip() if base_table.strip() in tables else choose_primary_table(schema)
+                    st.write(f"Preview table: `{selected}`")
+                    if selected:
+                        prev_df = sql_source.load_table(selected, limit=20)
+                        st.dataframe(prev_df, width="stretch")
+                else:
+                    st.warning("No tables found.")
+            except Exception as e:
+                st.warning(f"Could not inspect SQL source: {e}")
+        else:
+            st.info("Enter a database URL to preview tables.")
 
     st.subheader("2) Question")
     if question.strip():
         st.write(question.strip())
     else:
-        st.warning("Enter a question in the sidebar.")
+        st.warning("Enter a business question in the sidebar.")
+
+
+def _render_results(run_dir: Path, fallback_question: str) -> None:
+    plan_p = run_dir / "analysis_plan.json"
+    prof_p = run_dir / "data_profile.json"
+    qa_p = run_dir / "quality_report.json"
+    eda_p = run_dir / "eda_summary.json"
+    report_p = run_dir / "final_report.md"
+    warn_p = run_dir / "quality_warnings.md"
+    review_p = run_dir / "review_log.json"
+    logs_p = run_dir / "logs.txt"
+    charts_dir = run_dir / "charts"
+
+    tabs = st.tabs(["Answer", "Report", "Charts", "Artifacts", "Logs"])
+
+    with tabs[0]:
+        st.markdown("## Structured Answer")
+        plan = safe_read_json(plan_p) if plan_p.exists() else {}
+        prof = safe_read_json(prof_p) if prof_p.exists() else {}
+        qa = safe_read_json(qa_p) if qa_p.exists() else {}
+        eda = safe_read_json(eda_p) if eda_p.exists() else {}
+        review = safe_read_json(review_p) if review_p.exists() else {}
+
+        st.write(f"**Question:** {plan.get('business_question', fallback_question)}")
+        st.write(f"**Rows x Cols:** {prof.get('n_rows', '—')} x {prof.get('n_cols', '—')}")
+        if "sql_schema" in prof and isinstance(prof["sql_schema"], dict):
+            st.write(
+                f"**SQL tables:** {prof['sql_schema'].get('table_count', '—')} "
+                f"(relationships: {prof['sql_schema'].get('relationship_count', '—')})"
+            )
+        st.write(
+            f"**Duplicate rate:** {qa.get('duplicate_rate', 0.0):.2%}"
+            if "duplicate_rate" in qa
+            else "**Duplicate rate:** —"
+        )
+
+        warnings = qa.get("warnings", [])
+        st.write(f"**Data quality warnings:** {len(warnings)}")
+        if warnings:
+            for w in warnings[:15]:
+                st.write(f"- {w}")
+            if warn_p.exists():
+                st.caption("Full list in quality_warnings.md")
+
+        charts = eda.get("charts", [])
+        qa_charts = eda.get("question_aware_charts", [])
+        st.write(f"**Question-aware charts:** {len(qa_charts)}")
+        st.write(f"**Total charts:** {len(charts)}")
+
+        st.write(f"**Reviewer status:** {review.get('status', '—')}")
+        missing = review.get("missing_refs", []) or review.get("missing_artifacts", [])
+        if missing:
+            st.error(f"Missing evidence refs: {missing}")
+
+    with tabs[1]:
+        st.markdown("## Final Report")
+        if report_p.exists():
+            st.markdown(safe_read_text(report_p))
+        else:
+            st.warning("final_report.md not found.")
+
+    with tabs[2]:
+        st.markdown("## Charts")
+        if charts_dir.exists():
+            imgs = sorted([p for p in charts_dir.iterdir() if p.suffix.lower() in [".png", ".jpg", ".jpeg"]])
+            if imgs:
+                for img in imgs:
+                    st.image(str(img), caption=img.name, width="stretch")
+            else:
+                st.info("No charts found.")
+        else:
+            st.info("Charts directory not found.")
+
+    with tabs[3]:
+        st.markdown("## Artifacts")
+        st.code(str(run_dir))
+        files = sorted([p for p in run_dir.iterdir() if p.is_file()])
+        for p in files:
+            st.write(f"- {p.name}")
+            if p.suffix.lower() in [".md", ".json", ".csv", ".txt", ".sql"]:
+                st.download_button(
+                    label=f"Download {p.name}",
+                    data=p.read_bytes(),
+                    file_name=p.name,
+                    mime="application/octet-stream",
+                    key=f"dl_{p.name}_{p.stat().st_size}",
+                )
+
+    with tabs[4]:
+        st.markdown("## Logs")
+        if logs_p.exists():
+            st.code(safe_read_text(logs_p))
+        else:
+            st.info("logs.txt not found.")
+
 
 with col_right:
     st.subheader("Run & Results")
-    st.write("Click **Run Analysis** to generate artifacts + report.")
+    st.write("Click **Run Analysis** to generate artifacts and a structured report.")
 
     if run_btn:
-        if uploaded is None:
-            st.error("Please upload a CSV file.")
-            st.stop()
         if not question.strip():
             st.error("Please enter a business question.")
             st.stop()
 
-        # Save uploaded file to a temp path (so your pipeline can read from disk)
-        with st.spinner("Saving uploaded CSV..."):
-            tmp_dir = Path(tempfile.mkdtemp(prefix="ai_analyst_"))
-            csv_path = tmp_dir / uploaded.name
-            csv_path.write_bytes(uploaded.getvalue())
-
-        st.info(f"Saved to temporary file: {csv_path}")
-
-        # Run pipeline
-        with st.spinner("Running analysis pipeline (Phase 1)..."):
-            run_dir = run_pipeline(str(csv_path), question.strip())
-
-        st.success(f"Done! Run folder: {run_dir}")
-
-        # Load artifacts and render structured results
-        run_dir = Path(run_dir)
-
-        # Files we expect
-        plan_p = run_dir / "analysis_plan.json"
-        prof_p = run_dir / "data_profile.json"
-        qa_p = run_dir / "quality_report.json"
-        eda_p = run_dir / "eda_summary.json"
-        report_p = run_dir / "final_report.md"
-        warn_p = run_dir / "quality_warnings.md"
-        review_p = run_dir / "review_log.json"
-        logs_p = run_dir / "logs.txt"
-        charts_dir = run_dir / "charts"
-
-        tabs = st.tabs(["Answer", "Report", "Charts", "Artifacts", "Logs"])
-
-        # ---------- Answer ----------
-        with tabs[0]:
-            st.markdown("## ✅ Structured Answer")
-
-            plan = safe_read_json(plan_p) if plan_p.exists() else {}
-            prof = safe_read_json(prof_p) if prof_p.exists() else {}
-            qa = safe_read_json(qa_p) if qa_p.exists() else {}
-            eda = safe_read_json(eda_p) if eda_p.exists() else {}
-            review = safe_read_json(review_p) if review_p.exists() else {}
-
-            # Executive Summary
-            st.markdown("### Executive Summary")
-            st.write(f"**Question:** {plan.get('business_question', question.strip())}")
-            st.write(f"**Rows × Cols:** {prof.get('n_rows', '—')} × {prof.get('n_cols', '—')}")
-            st.write(f"**Duplicate rate:** {qa.get('duplicate_rate', 0.0):.2%}" if "duplicate_rate" in qa else "**Duplicate rate:** —")
-
-            warnings = qa.get("warnings", [])
-            st.write(f"**Data quality warnings:** {len(warnings)}")
-
-            if warnings:
-                st.markdown("### ⚠️ Data Quality Warnings")
-                for w in warnings[:20]:
-                    st.write(f"- {w}")
-                if warn_p.exists():
-                    st.caption("Full list: quality_warnings.md")
-
-            # EDA summary
-            st.markdown("### 📊 EDA Summary")
-            num_cols = eda.get("numeric_columns", [])
-            st.write(f"**Numeric columns detected:** {len(num_cols)}")
-            if num_cols:
-                st.write(", ".join(num_cols[:15]) + (" ..." if len(num_cols) > 15 else ""))
-
-            charts = eda.get("charts", [])
-            st.write(f"**Charts generated:** {len(charts)}")
-
-            # Reviewer
-            st.markdown("### 🛡️ Reviewer Check")
-            st.write(f"**Status:** {review.get('status', '—')}")
-            missing = review.get("missing_artifacts", [])
-            if missing:
-                st.error(f"Missing artifacts: {missing}")
-
-        # ---------- Report ----------
-        with tabs[1]:
-            st.markdown("## 📝 Final Report")
-            if report_p.exists():
-                st.markdown(safe_read_text(report_p))
+        try:
+            if source_type == "CSV":
+                if uploaded is None:
+                    st.error("Please upload a CSV file.")
+                    st.stop()
+                with st.spinner("Saving uploaded CSV..."):
+                    tmp_dir = Path(tempfile.mkdtemp(prefix="ai_analyst_"))
+                    csv_path = tmp_dir / uploaded.name
+                    csv_path.write_bytes(uploaded.getvalue())
+                st.info(f"Temporary file: {csv_path}")
+                with st.spinner("Running CSV pipeline..."):
+                    run_dir = run_csv_pipeline(str(csv_path), question.strip())
             else:
-                st.warning("final_report.md not found.")
+                if not db_url.strip():
+                    st.error("Please enter a database URL.")
+                    st.stop()
+                with st.spinner("Running SQL pipeline..."):
+                    run_dir = run_sql_pipeline(
+                        db_url=db_url.strip(),
+                        business_question=question.strip(),
+                        base_table=base_table.strip() or None,
+                    )
+        except Exception as e:
+            st.error(f"Pipeline failed: {e}")
+            st.stop()
 
-        # ---------- Charts ----------
-        with tabs[2]:
-            st.markdown("## 📈 Charts")
-            if charts_dir.exists():
-                imgs = sorted([p for p in charts_dir.iterdir() if p.suffix.lower() in [".png", ".jpg", ".jpeg"]])
-                if not imgs:
-                    st.info("No charts found.")
-                else:
-                    for p in imgs:
-                        st.image(str(p), caption=p.name, use_container_width=True)
-            else:
-                st.info("Charts directory not found.")
-
-        # ---------- Artifacts ----------
-        with tabs[3]:
-            st.markdown("## 📦 Artifacts Folder")
-            st.code(str(run_dir))
-
-            files = sorted([p for p in run_dir.iterdir() if p.is_file()])
-            if files:
-                for p in files:
-                    st.write(f"- {p.name}")
-                    # Download buttons for key artifacts
-                    if p.suffix.lower() in [".md", ".json", ".csv", ".txt"]:
-                        st.download_button(
-                            label=f"Download {p.name}",
-                            data=p.read_bytes(),
-                            file_name=p.name,
-                            mime="application/octet-stream",
-                            key=f"dl_{p.name}",
-                        )
-            else:
-                st.info("No artifact files found.")
-
-        # ---------- Logs ----------
-        with tabs[4]:
-            st.markdown("## 🪵 Logs")
-            if logs_p.exists():
-                st.code(safe_read_text(logs_p))
-            else:
-                st.info("logs.txt not found.")
-
+        st.success(f"Done. Run folder: {run_dir}")
+        _render_results(Path(run_dir), question.strip())
     else:
-        st.info("Ready when you are. Upload a CSV and ask a question in the sidebar.")
+        st.info("Ready. Provide source + question, then run.")

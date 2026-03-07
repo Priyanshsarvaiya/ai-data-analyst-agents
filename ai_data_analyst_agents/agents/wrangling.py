@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 import pandas as pd
 from ai_data_analyst_agents.core.agent_base import Agent
 

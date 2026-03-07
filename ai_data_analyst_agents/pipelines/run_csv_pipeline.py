@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,7 @@ from ai_data_analyst_agents.agents.planner import PlannerAgent
 from ai_data_analyst_agents.agents.metrics import MetricsAgent
 from ai_data_analyst_agents.agents.reporting import ReportingAgent
 from ai_data_analyst_agents.agents.reviewer import ReviewerAgent
+import ai_data_analyst_agents.agents.planner as planner_module
 
 
 def run_pipeline(file_path: str, business_question: str) -> Path:
@@ -32,6 +34,7 @@ def run_pipeline(file_path: str, business_question: str) -> Path:
 
     logger.info(f"Run dir: {store.run_dir}")
     logger.info(f"Loading CSV: {file_path}")
+    logger.info(f"Planner module path: {planner_module.__file__}")
 
     df = pd.read_csv(file_path)
 
@@ -46,6 +49,7 @@ def run_pipeline(file_path: str, business_question: str) -> Path:
         "business_question": business_question,
         "memory": memory,
         "evidence": evidence,
+        "source": {"type": "csv", "file_path": file_path},
     }
 
     # ✅ Agent registry (planner + metrics included)
@@ -65,8 +69,12 @@ def run_pipeline(file_path: str, business_question: str) -> Path:
     orch = Orchestrator(agents=agents, logger=logger)
 
     try:
-        results = orch.run(tasks, ctx)
+        orch.run(tasks, ctx)
     except Exception:
+        store.write_json(
+            "agent_messages.json",
+            [asdict(m) if hasattr(m, "__dataclass_fields__") else {"value": str(m)} for m in memory.messages],
+        )
         # Ensure a failing run still leaves a trace in artifacts/logs
         logger.exception("Pipeline failed.")
         store.write_json(
@@ -88,6 +96,10 @@ def run_pipeline(file_path: str, business_question: str) -> Path:
             "tasks": [{"name": t.name, "reason": t.reason} for t in tasks],
             "evidence_ids": list(evidence.all().keys()),
         },
+    )
+    store.write_json(
+        "agent_messages.json",
+        [asdict(m) if hasattr(m, "__dataclass_fields__") else {"value": str(m)} for m in memory.messages],
     )
 
     logger.info("Done.")

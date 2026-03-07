@@ -4,6 +4,14 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.kpi_templates import detect_business_domain, pick_template_dimension
+from ai_data_analyst_agents.core.metric_engine import (
+    compute_cohort_retention,
+    compute_metric_definition,
+    compute_segment_profile,
+    compute_template_kpis,
+)
+from ai_data_analyst_agents.core.sql_source import compute_join_profile
 
 
 # -----------------------------
@@ -23,8 +31,14 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
 
     Canonical schemas:
     - groupby_agg: {group_by, metric, agg?, limit?}
+    - groupby2_agg: {group_by_1, group_by_2, metric, agg?, limit?}
     - filter_agg: {filter_col, filter_val, metric, agg?}
     - correlation: {x, y}
+    - distribution: {column, quantiles?}
+    - group_distribution: {group_by, metric, agg?, quantiles?}
+    - recency_by_group: {group_by, date_col}
+    - topk: {by, metric, agg?, k?}
+    - timeseries_agg: {date_col, metric, freq?, agg?}
     """
     t: Dict[str, Any] = dict(task or {})
     p: Dict[str, Any] = dict(t.get("params", {}) or {})
@@ -47,11 +61,78 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             p["limit"] = 50
 
+    elif ttype == "groupby2_agg":
+        if "group_by_1" not in p:
+            p["group_by_1"] = _first_present(
+                p, ["group_by_1", "group1", "group_by", "groupby_1", "dim1", "dimension1"]
+            )
+        if "group_by_2" not in p:
+            p["group_by_2"] = _first_present(
+                p, ["group_by_2", "group2", "groupby_2", "dim2", "dimension2"]
+            )
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
+        if "agg" not in p:
+            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+        if "limit" not in p:
+            p["limit"] = _first_present(p, ["limit", "top_k", "topk", "k"]) or 100
+
+        try:
+            p["limit"] = int(p["limit"])
+        except Exception:
+            p["limit"] = 100
+
     elif ttype == "correlation":
         if "x" not in p:
             p["x"] = _first_present(p, ["x", "col1", "a", "feature_x", "feature1"])
         if "y" not in p:
             p["y"] = _first_present(p, ["y", "col2", "b", "feature_y", "feature2"])
+
+    elif ttype == "distribution":
+        if "column" not in p:
+            p["column"] = _first_present(p, ["column", "metric", "col", "feature", "x"])
+        if "quantiles" not in p or not isinstance(p.get("quantiles"), list):
+            p["quantiles"] = [0.05, 0.25, 0.5, 0.75, 0.95]
+
+    elif ttype == "group_distribution":
+        if "group_by" not in p:
+            p["group_by"] = _first_present(p, ["group_by", "groupby", "group", "dimension", "by", "column", "col"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
+        if "agg" not in p:
+            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+        if "quantiles" not in p or not isinstance(p.get("quantiles"), list):
+            p["quantiles"] = [0.5, 0.75, 0.9, 0.95, 0.99]
+
+    elif ttype == "recency_by_group":
+        if "group_by" not in p:
+            p["group_by"] = _first_present(p, ["group_by", "groupby", "group", "dimension", "by", "column", "col"])
+        if "date_col" not in p:
+            p["date_col"] = _first_present(p, ["date_col", "date", "time_col", "timestamp_col", "x"])
+
+    elif ttype == "topk":
+        if "by" not in p:
+            p["by"] = _first_present(p, ["by", "group_by", "groupby", "group", "dimension", "column", "col"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
+        if "agg" not in p:
+            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+        if "k" not in p:
+            p["k"] = _first_present(p, ["k", "top_k", "topk", "limit"]) or 10
+        try:
+            p["k"] = int(p["k"])
+        except Exception:
+            p["k"] = 10
+
+    elif ttype == "timeseries_agg":
+        if "date_col" not in p:
+            p["date_col"] = _first_present(p, ["date_col", "date", "time_col", "timestamp_col", "x"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y"])
+        if "freq" not in p:
+            p["freq"] = _first_present(p, ["freq", "granularity", "period"]) or "M"
+        if "agg" not in p:
+            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
 
     elif ttype == "filter_agg":
         # ✅ Handle nested where dict produced by some planners:
@@ -97,6 +178,64 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             )
         if "agg" not in p:
             p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+
+    elif ttype == "sql_query":
+        if "query" not in p:
+            p["query"] = _first_present(p, ["query", "sql", "statement"])
+        if "limit" not in p:
+            p["limit"] = _first_present(p, ["limit", "max_rows", "top_k", "k"]) or 1000
+        if "output" not in p:
+            p["output"] = _first_present(p, ["output", "format", "mode"]) or "rows"
+        try:
+            p["limit"] = int(p["limit"])
+        except Exception:
+            p["limit"] = 1000
+
+    elif ttype == "sql_join_profile":
+        if "fact_table" not in p:
+            p["fact_table"] = _first_present(p, ["fact_table", "from_table", "base_table"])
+        if "dimension_table" not in p:
+            p["dimension_table"] = _first_present(p, ["dimension_table", "to_table", "join_table"])
+
+    elif ttype == "kpi_template_apply":
+        if "domain" not in p:
+            p["domain"] = _first_present(p, ["domain", "template", "kpi_domain"])
+        if "segment_by" not in p:
+            p["segment_by"] = _first_present(p, ["segment_by", "group_by", "dimension", "by"])
+
+    elif ttype == "metric_definition":
+        if "name" not in p:
+            p["name"] = _first_present(p, ["name", "metric_name", "id"])
+        if "metric_col" not in p:
+            p["metric_col"] = _first_present(p, ["metric_col", "metric", "value_col", "column"])
+        if "expression" not in p:
+            p["expression"] = _first_present(p, ["expression", "expr", "formula"])
+        if "group_by" not in p:
+            p["group_by"] = _first_present(p, ["group_by", "segment_by", "dimension", "by"])
+        if "agg" not in p:
+            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+
+    elif ttype == "segment_analysis":
+        if "segment_by" not in p:
+            p["segment_by"] = _first_present(p, ["segment_by", "group_by", "by", "dimension"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "metric_col", "value", "measure"])
+        if "agg" not in p:
+            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+        if "limit" not in p:
+            p["limit"] = _first_present(p, ["limit", "top_k", "k"]) or 100
+        try:
+            p["limit"] = int(p["limit"])
+        except Exception:
+            p["limit"] = 100
+
+    elif ttype == "cohort_analysis":
+        if "entity_col" not in p:
+            p["entity_col"] = _first_present(p, ["entity_col", "entity", "id_col", "customer_col"])
+        if "date_col" not in p:
+            p["date_col"] = _first_present(p, ["date_col", "date", "time_col", "timestamp_col"])
+        if "freq" not in p:
+            p["freq"] = _first_present(p, ["freq", "period", "granularity"]) or "M"
 
     t["params"] = p
     return t
@@ -147,9 +286,12 @@ class MetricsAgent(Agent):
     name = "metrics"
 
     def run(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = ctx["cfg"]
         store = ctx["store"]
         logger = ctx["logger"]
         evidence = ctx["evidence"]
+        sql_source = ctx.get("sql_source")
+        sql_schema = ctx.get("sql_schema") if isinstance(ctx.get("sql_schema"), dict) else None
 
         df: pd.DataFrame = ctx["memory"].get("df.cleaned", ctx["df"])
         task_plan = ctx["memory"].get("result.planner", {}) or {}
@@ -189,12 +331,9 @@ class MetricsAgent(Agent):
                     _ensure_col(df, group)
                     _ensure_col(df, metric)
 
-                    res = (
-                        df.groupby(group)[metric]
-                        .agg(agg)
-                        .sort_values(ascending=False)
-                        .head(limit)
-                    )
+                    res = df.groupby(group)[metric].agg(agg).sort_values(ascending=False)
+                    if limit > 0:
+                        res = res.head(limit)
 
                     artifact = f"{tid}_groupby_{group}_{metric}_{agg}.json"
                     store.write_json(artifact, res.to_dict())
@@ -203,7 +342,40 @@ class MetricsAgent(Agent):
                         kind="json",
                         artifact_path=artifact,
                         pointer=None,
-                        summary=f"{agg}({metric}) grouped by {group} (top {limit})",
+                        summary=f"{agg}({metric}) grouped by {group}" + (f" (top {limit})" if limit > 0 else " (all)"),
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "groupby2_agg":
+                    _require_params(tid, ttype, p, ["group_by_1", "group_by_2", "metric"])
+                    g1 = str(p["group_by_1"])
+                    g2 = str(p["group_by_2"])
+                    metric = str(p["metric"])
+                    agg = str(p.get("agg", "sum"))
+                    limit = int(p.get("limit", 100))
+
+                    _ensure_col(df, g1)
+                    _ensure_col(df, g2)
+                    _ensure_col(df, metric)
+
+                    res = df.groupby([g1, g2])[metric].agg(agg).sort_values(ascending=False)
+                    if limit > 0:
+                        res = res.head(limit)
+                    rows = []
+                    for idx, val in res.to_dict().items():
+                        if isinstance(idx, tuple) and len(idx) == 2:
+                            rows.append({g1: idx[0], g2: idx[1], "value": float(val)})
+                        else:
+                            rows.append({"group_key": str(idx), "value": float(val)})
+
+                    artifact = f"{tid}_groupby2_{g1}_{g2}_{metric}_{agg}.json"
+                    store.write_json(artifact, rows)
+
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"{agg}({metric}) grouped by ({g1}, {g2})" + (f" (top {limit})" if limit > 0 else " (all)"),
                     )
                     outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
 
@@ -263,6 +435,355 @@ class MetricsAgent(Agent):
                         artifact_path=artifact,
                         pointer="corr",
                         summary=f"Correlation between {x} and {y}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "distribution":
+                    _require_params(tid, ttype, p, ["column"])
+                    col = str(p["column"])
+                    _ensure_col(df, col)
+
+                    q_list = p.get("quantiles", [0.05, 0.25, 0.5, 0.75, 0.95])
+                    if not isinstance(q_list, list):
+                        q_list = [0.05, 0.25, 0.5, 0.75, 0.95]
+                    q_vals = []
+                    for q in q_list:
+                        try:
+                            qf = float(q)
+                            if 0.0 <= qf <= 1.0:
+                                q_vals.append(qf)
+                        except Exception:
+                            continue
+                    if not q_vals:
+                        q_vals = [0.05, 0.25, 0.5, 0.75, 0.95]
+
+                    s = pd.to_numeric(df[col], errors="coerce").dropna()
+                    if s.empty:
+                        outputs["skipped"].append(
+                            {"task_id": tid, "reason": f"No numeric values available for distribution ({col})."}
+                        )
+                        continue
+
+                    q = s.quantile(q_vals).to_dict()
+                    quantiles = {str(k): float(v) for k, v in q.items()}
+                    payload = {
+                        "column": col,
+                        "count": int(s.shape[0]),
+                        "mean": float(s.mean()),
+                        "std": float(s.std()) if s.shape[0] > 1 else 0.0,
+                        "min": float(s.min()),
+                        "max": float(s.max()),
+                        "quantiles": quantiles,
+                    }
+
+                    artifact = f"{tid}_dist_{col}.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"Distribution summary for {col}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "group_distribution":
+                    _require_params(tid, ttype, p, ["group_by", "metric"])
+                    group = str(p["group_by"])
+                    metric = str(p["metric"])
+                    agg = str(p.get("agg", "sum"))
+                    _ensure_col(df, group)
+                    _ensure_col(df, metric)
+
+                    grouped = df.groupby(group)[metric].agg(agg)
+                    s = pd.to_numeric(grouped, errors="coerce").dropna()
+                    if s.empty:
+                        outputs["skipped"].append(
+                            {"task_id": tid, "reason": f"No numeric grouped values for distribution ({group}, {metric})."}
+                        )
+                        continue
+
+                    q_list = p.get("quantiles", [0.5, 0.75, 0.9, 0.95, 0.99])
+                    if not isinstance(q_list, list):
+                        q_list = [0.5, 0.75, 0.9, 0.95, 0.99]
+                    q_vals = []
+                    for q in q_list:
+                        try:
+                            qf = float(q)
+                            if 0.0 <= qf <= 1.0:
+                                q_vals.append(qf)
+                        except Exception:
+                            continue
+                    if not q_vals:
+                        q_vals = [0.5, 0.75, 0.9, 0.95, 0.99]
+
+                    q = s.quantile(q_vals).to_dict()
+                    payload = {
+                        "group_by": group,
+                        "metric": metric,
+                        "agg": agg,
+                        "n_groups": int(s.shape[0]),
+                        "quantiles": {str(k): float(v) for k, v in q.items()},
+                        "max_group_value": float(s.max()),
+                        "min_group_value": float(s.min()),
+                        "mean_group_value": float(s.mean()),
+                    }
+
+                    artifact = f"{tid}_group_dist_{group}_{metric}_{agg}.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"Distribution of {agg}({metric}) across {group}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "recency_by_group":
+                    _require_params(tid, ttype, p, ["group_by", "date_col"])
+                    group = str(p["group_by"])
+                    date_col = str(p["date_col"])
+                    _ensure_col(df, group)
+                    _ensure_col(df, date_col)
+
+                    dff = df[[group, date_col]].copy()
+                    dff[date_col] = pd.to_datetime(dff[date_col], errors="coerce")
+                    dff = dff.dropna(subset=[group, date_col])
+                    if dff.empty:
+                        outputs["skipped"].append(
+                            {"task_id": tid, "reason": f"No valid rows for recency computation ({group}, {date_col})."}
+                        )
+                        continue
+
+                    latest = dff[date_col].max()
+                    rec = dff.groupby(group)[date_col].max()
+                    out = {str(k): int((latest - v).days) for k, v in rec.items()}
+
+                    artifact = f"{tid}_recency_{group}_{date_col}.json"
+                    store.write_json(artifact, {"group_by": group, "reference_date": latest.isoformat(), "recency_days": out})
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer="recency_days",
+                        summary=f"Recency days by {group} using {date_col}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "topk":
+                    _require_params(tid, ttype, p, ["by", "metric"])
+                    by = str(p["by"])
+                    metric = str(p["metric"])
+                    agg = str(p.get("agg", "sum"))
+                    k = int(p.get("k", 10))
+
+                    _ensure_col(df, by)
+                    _ensure_col(df, metric)
+
+                    res = (
+                        df.groupby(by)[metric]
+                        .agg(agg)
+                        .sort_values(ascending=False)
+                        .head(k)
+                    )
+
+                    artifact = f"{tid}_topk_{by}_{metric}_{agg}.json"
+                    store.write_json(artifact, res.to_dict())
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"Top {k} {by} by {agg}({metric})",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "timeseries_agg":
+                    _require_params(tid, ttype, p, ["date_col", "metric"])
+                    date_col = str(p["date_col"])
+                    metric = str(p["metric"])
+                    freq = str(p.get("freq", "M")).upper()
+                    agg = str(p.get("agg", "sum"))
+                    freq_alias = {"M": "ME", "Q": "QE"}.get(freq, freq)
+
+                    _ensure_col(df, date_col)
+                    _ensure_col(df, metric)
+
+                    dff = df[[date_col, metric]].copy()
+                    dff[date_col] = pd.to_datetime(dff[date_col], errors="coerce")
+                    dff[metric] = pd.to_numeric(dff[metric], errors="coerce")
+                    dff = dff.dropna(subset=[date_col, metric])
+                    if dff.empty:
+                        outputs["skipped"].append(
+                            {"task_id": tid, "reason": f"No valid rows for timeseries aggregation ({date_col}, {metric})."}
+                        )
+                        continue
+
+                    res = (
+                        dff.set_index(date_col)[metric]
+                        .resample(freq_alias)
+                        .agg(agg)
+                        .dropna()
+                    )
+                    out = {}
+                    for k, v in res.to_dict().items():
+                        key = k.isoformat() if hasattr(k, "isoformat") else str(k)
+                        out[key] = float(v)
+
+                    artifact = f"{tid}_timeseries_{date_col}_{metric}_{freq}_{agg}.json"
+                    store.write_json(artifact, out)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"{agg}({metric}) resampled by {freq} on {date_col}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "sql_query":
+                    _require_params(tid, ttype, p, ["query"])
+                    if sql_source is None:
+                        outputs["skipped"].append({"task_id": tid, "reason": "SQL source unavailable in current run."})
+                        continue
+
+                    query = str(p["query"])
+                    limit = int(p.get("limit", cfg.sql.default_query_row_limit))
+                    output_mode = str(p.get("output", "rows")).lower()
+
+                    store.write_text(f"{tid}_query.sql", query.strip() + "\n")
+                    qdf = sql_source.execute_query(query, limit=limit)
+
+                    payload: Dict[str, Any]
+                    if output_mode == "mapping" and qdf.shape[1] >= 2:
+                        key_col = qdf.columns[0]
+                        val_col = qdf.columns[1]
+                        mapping: Dict[str, float] = {}
+                        for _, row in qdf.iterrows():
+                            try:
+                                mapping[str(row[key_col])] = float(row[val_col])
+                            except Exception:
+                                continue
+                        payload = mapping
+                    else:
+                        payload = {
+                            "columns": [str(c) for c in qdf.columns.tolist()],
+                            "rows": qdf.to_dict(orient="records"),
+                            "n_rows": int(qdf.shape[0]),
+                        }
+
+                    artifact = f"{tid}_sql_query.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"SQL query result ({qdf.shape[0]} rows)",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "sql_join_profile":
+                    _require_params(tid, ttype, p, ["fact_table"])
+                    if sql_source is None:
+                        outputs["skipped"].append({"task_id": tid, "reason": "SQL source unavailable in current run."})
+                        continue
+
+                    profile = compute_join_profile(
+                        engine=sql_source.engine,
+                        schema=sql_schema or {},
+                        fact_table=str(p["fact_table"]),
+                        dimension_table=str(p["dimension_table"]) if p.get("dimension_table") else None,
+                    )
+                    artifact = f"{tid}_sql_join_profile.json"
+                    store.write_json(artifact, profile)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary="SQL join path and row coverage profile",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "kpi_template_apply":
+                    _require_params(tid, ttype, p, ["domain"])
+                    domain = str(p["domain"]).lower()
+                    if not domain:
+                        domain = detect_business_domain(ctx.get("business_question", ""), list(df.columns))
+                    payload = compute_template_kpis(df, domain)
+
+                    segment_by = p.get("segment_by")
+                    if not segment_by:
+                        segment_by = pick_template_dimension(domain, list(df.columns))
+                    if segment_by and "kpis" in payload:
+                        # Add one segment view using the first available base KPI column.
+                        seg_metric_col = None
+                        for name, col in payload.get("resolved_columns", {}).items():
+                            if col is not None:
+                                seg_metric_col = str(col)
+                                break
+                        if seg_metric_col and seg_metric_col in df.columns:
+                            payload["segment_sample"] = compute_segment_profile(
+                                df=df,
+                                segment_by=str(segment_by),
+                                metric=seg_metric_col,
+                                agg="sum",
+                                limit=20,
+                            )
+
+                    artifact = f"{tid}_kpi_template_{domain}.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"KPI template metrics for domain={domain}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "metric_definition":
+                    _require_params(tid, ttype, p, ["name"])
+                    payload = compute_metric_definition(df, p)
+                    artifact = f"{tid}_metric_definition_{str(p.get('name')).lower().replace(' ', '_')}.json"
+                    store.write_json(artifact, payload)
+                    pointer = "value" if isinstance(payload, dict) and "value" in payload else None
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=pointer,
+                        summary=f"Metric definition output: {p.get('name')}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "segment_analysis":
+                    _require_params(tid, ttype, p, ["segment_by", "metric"])
+                    payload = compute_segment_profile(
+                        df=df,
+                        segment_by=str(p["segment_by"]),
+                        metric=str(p["metric"]),
+                        agg=str(p.get("agg", "sum")),
+                        limit=int(p.get("limit", 100)),
+                    )
+                    artifact = f"{tid}_segment_{p['segment_by']}_{p['metric']}.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer="values",
+                        summary=f"Segment analysis by {p['segment_by']} on {p['metric']}",
+                    )
+                    outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "cohort_analysis":
+                    _require_params(tid, ttype, p, ["entity_col", "date_col"])
+                    payload = compute_cohort_retention(
+                        df=df,
+                        entity_col=str(p["entity_col"]),
+                        date_col=str(p["date_col"]),
+                        freq=str(p.get("freq", "M")).upper(),
+                    )
+                    artifact = f"{tid}_cohort_{p['entity_col']}_{p['date_col']}.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer=None,
+                        summary=f"Cohort retention by {p['entity_col']} over {p['date_col']}",
                     )
                     outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
 

@@ -76,7 +76,7 @@ Edit `.env` and add your OpenRouter API key and model:
 
 ``` env
 OPENROUTER_API_KEY=your_key_here
-OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_MODEL=z-ai/glm-5
 OPENROUTER_SITE_URL=http://localhost
 OPENROUTER_APP_NAME=ai-data-analyst-agents
 
@@ -101,6 +101,12 @@ Place your CSV file inside the `data/` folder:
 
 ``` bash
 python -m ai_data_analyst_agents.pipelines.run_csv_pipeline   --file data/your_dataset.csv   --question "What insights can we derive from this dataset?"
+```
+
+For SQL sources (SQLite/PostgreSQL):
+
+``` bash
+python -m ai_data_analyst_agents.pipelines.run_sql_pipeline   --db-url "sqlite:///data/your.db"   --question "What insights can we derive from this database?"
 ```
 
 ------------------------------------------------------------------------
@@ -306,6 +312,7 @@ ai-data-analyst-agents/
     validation_tools.py
   pipelines/
     run_csv_pipeline.py
+    run_sql_pipeline.py
   artifacts/
     (generated outputs)
   tests/
@@ -540,22 +547,22 @@ For questions, issues, or suggestions:
 ---
 
 ### 🟡 Phase 2 – True Multi-Agent Orchestration
-- [ ] Introduce structured agent communication layer
-- [ ] Add shared memory between agents
-- [ ] Implement task planning & delegation logic
-- [ ] Add Reviewer / Guardrail Agent for claim validation
-- [ ] Evidence-linking system (every claim references artifact)
-- [ ] Improve modularity for agent swapping/extending
+- [✅] Introduce structured agent communication layer
+- [✅] Add shared memory between agents
+- [✅] Implement task planning & delegation logic
+- [✅] Add Reviewer / Guardrail Agent for claim validation
+- [✅] Evidence-linking system (every claim references artifact)
+- [✅] Improve modularity for agent swapping/extending
 
 ---
 
 ### 🟠 Phase 3 – SQL & Business Context Expansion
-- [ ] Add SQL data source support (PostgreSQL, SQLite)
-- [ ] Schema-aware query generation
-- [ ] Multi-table join reasoning
-- [ ] KPI template library (SaaS, Ecommerce, Marketing, Ops)
-- [ ] Business metric definition engine
-- [ ] Segment & cohort analysis templates
+- [✅] Add SQL data source support (PostgreSQL, SQLite)
+- [✅] Schema-aware query generation
+- [✅] Multi-table join reasoning
+- [✅] KPI template library (SaaS, Ecommerce, Marketing, Ops)
+- [✅] Business metric definition engine
+- [✅] Segment & cohort analysis templates
 
 ---
 
@@ -595,4 +602,3 @@ For questions, issues, or suggestions:
 
 **Note**: This project is under active development. Features and documentation may change.
 **Note**: This project is designed as a serious analytics engineering system — not just a chatbot over CSV. It aims to demonstrate production-grade data reasoning with AI agents.
-
