@@ -33,22 +33,40 @@ def _inject_styles() -> None:
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
           :root {
-            --bg: #f5f7f2;
-            --ink: #132a13;
-            --muted: #436850;
-            --brand: #2d6a4f;
-            --brand-2: #40916c;
-            --accent: #f4a261;
-            --card: #ffffff;
-            --line: #d8e3da;
+            --bg: #090e1b;
+            --ink: #e7efff;
+            --muted: #a5b6d8;
+            --brand: #4aa8ff;
+            --brand-2: #6fe6d1;
+            --accent: #ffb86b;
+            --card: #111a2f;
+            --line: #2a3b64;
           }
           html, body, [class*="st-"] {
             font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
           }
+          /* Restore Streamlit material icon ligatures (prevents keyboard_double_arrow_* text). */
+          .material-symbols-rounded,
+          .material-icons,
+          [data-testid="stIconMaterial"],
+          [data-testid="stSidebarCollapseButton"] span,
+          [data-testid="collapsedControl"] span {
+            font-family: "Material Symbols Rounded", "Material Icons" !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            line-height: 1 !important;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            white-space: nowrap !important;
+            word-wrap: normal !important;
+            direction: ltr !important;
+            -webkit-font-feature-settings: "liga" !important;
+            -webkit-font-smoothing: antialiased !important;
+          }
           .stApp {
             background:
-              radial-gradient(1200px 380px at 85% -10%, rgba(244, 162, 97, 0.18), transparent 60%),
-              radial-gradient(1000px 420px at -15% -10%, rgba(64, 145, 108, 0.14), transparent 62%),
+              radial-gradient(1200px 500px at 88% -10%, rgba(111, 230, 209, 0.16), transparent 62%),
+              radial-gradient(900px 420px at -10% -15%, rgba(74, 168, 255, 0.16), transparent 65%),
               var(--bg);
             color: var(--ink);
           }
@@ -57,12 +75,26 @@ def _inject_styles() -> None:
             padding-top: 1.2rem;
             padding-bottom: 2rem;
           }
+          header[data-testid="stHeader"] {
+            background: rgba(9, 14, 27, 0.76);
+            backdrop-filter: blur(6px);
+          }
+          [data-testid="stToolbar"] {
+            color: #d9e8ff !important;
+          }
+          [data-testid="stMarkdownContainer"] p,
+          [data-testid="stMarkdownContainer"] li,
+          [data-testid="stMarkdownContainer"] span,
+          [data-testid="stText"] {
+            color: var(--ink);
+          }
           .hero {
             padding: 1.05rem 1.25rem 1.15rem;
             border-radius: 18px;
-            background: linear-gradient(120deg, #132a13 0%, #2d6a4f 58%, #40916c 100%);
-            color: #f1fff6;
-            box-shadow: 0 14px 30px rgba(19, 42, 19, 0.24);
+            background: linear-gradient(120deg, #17294d 0%, #244273 55%, #1c7b88 100%);
+            color: #eff8ff;
+            border: 1px solid #2f4f7f;
+            box-shadow: 0 16px 32px rgba(5, 10, 22, 0.45);
             margin-bottom: 1rem;
           }
           .hero h1 {
@@ -72,17 +104,17 @@ def _inject_styles() -> None:
           }
           .hero p {
             margin: 0.35rem 0 0;
-            opacity: 0.95;
+            color: #d2e5ff;
             font-size: 0.95rem;
           }
           .auth-shell {
-            max-width: 760px;
+            max-width: 940px;
             margin: 1.2rem auto 0;
-            padding: 1.1rem 1.1rem 0.5rem;
-            border-radius: 18px;
-            background: rgba(255, 255, 255, 0.86);
-            border: 1px solid var(--line);
-            box-shadow: 0 14px 28px rgba(42, 62, 48, 0.12);
+            padding: 1.2rem 1.25rem;
+            border-radius: 24px;
+            background: linear-gradient(170deg, rgba(17, 27, 47, 0.96), rgba(14, 23, 39, 0.92));
+            border: 1px solid #2d426e;
+            box-shadow: 0 18px 36px rgba(3, 8, 20, 0.5);
           }
           .auth-title {
             margin: 0 0 0.25rem;
@@ -96,25 +128,208 @@ def _inject_styles() -> None:
           }
           .stat-chip {
             display: inline-block;
-            background: rgba(19, 42, 19, 0.08);
-            border: 1px solid rgba(19, 42, 19, 0.14);
-            color: #173622;
+            background: rgba(74, 168, 255, 0.16);
+            border: 1px solid rgba(74, 168, 255, 0.34);
+            color: #d8ebff;
             padding: 0.16rem 0.52rem;
             border-radius: 999px;
             font-size: 0.76rem;
             margin-right: 0.3rem;
             margin-top: 0.25rem;
           }
+          .auth-info-card {
+            border: 1px solid #2f4779;
+            background: linear-gradient(145deg, rgba(25, 38, 69, 0.95), rgba(18, 28, 50, 0.95));
+            border-radius: 18px;
+            padding: 0.95rem 1rem;
+            margin-top: 0.25rem;
+          }
+          .auth-info-title {
+            margin: 0;
+            color: #e3f0ff;
+            font-size: 1rem;
+            font-weight: 700;
+          }
+          .auth-info-body {
+            margin: 0.42rem 0 0;
+            color: #a8c0e8;
+            font-size: 0.89rem;
+            line-height: 1.45;
+          }
+          .auth-form-title {
+            margin: 0.2rem 0 0.45rem;
+            color: #dceaff;
+            font-size: 1.02rem;
+            font-weight: 700;
+          }
+          div[data-testid="stRadio"] > div {
+            background: rgba(18, 31, 55, 0.95);
+            border: 1px solid #324a7a;
+            border-radius: 12px;
+            padding: 0.3rem 0.45rem 0.15rem;
+          }
+          div[data-testid="stForm"] {
+            border: 1px solid #304a78;
+            border-radius: 16px;
+            padding: 0.75rem 0.9rem 0.45rem;
+            background: linear-gradient(180deg, rgba(18, 29, 52, 0.96), rgba(14, 24, 42, 0.96));
+          }
+          div[data-testid="stForm"] label p,
+          div[data-testid="stForm"] label span {
+            color: #dce9ff !important;
+            font-weight: 600 !important;
+          }
+          div[data-testid="stRadio"] label p,
+          div[data-testid="stRadio"] label span {
+            color: #dce9ff !important;
+            font-weight: 600 !important;
+          }
+          div[data-baseweb="select"] > div,
+          div[data-baseweb="input"] > div {
+            background: #10192f !important;
+            border: 1px solid #39538a !important;
+            box-shadow: none !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] {
+            background: transparent !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] button {
+            background: transparent !important;
+            border: none !important;
+            color: #dceaff !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] svg {
+            fill: #dceaff !important;
+          }
+          div[data-baseweb="input"] input,
+          div[data-baseweb="select"] input,
+          div[data-baseweb="textarea"] textarea {
+            color: #ebf3ff !important;
+          }
+          div[data-baseweb="input"] input::placeholder,
+          div[data-baseweb="textarea"] textarea::placeholder {
+            color: #8ca6d0 !important;
+          }
+          div[data-baseweb="textarea"] > div {
+            background: #10192f !important;
+            border: 1px solid #39538a !important;
+          }
+          div[data-baseweb="checkbox"] label span {
+            color: #c7daf7 !important;
+          }
+          button {
+            border-radius: 10px !important;
+            min-height: 2.65rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.2px;
+          }
+          button[kind="secondary"] {
+            background: #182543 !important;
+            border: 1px solid #355188 !important;
+            color: #dceaff !important;
+          }
+          div[data-testid="stForm"] button[kind="primary"] {
+            background: linear-gradient(120deg, #245ca5, #1e8e9a) !important;
+            border: 1px solid #2b6cbe !important;
+            color: #eef6ff !important;
+          }
+          div[data-testid="stForm"] button[kind="primary"]:hover {
+            border: 1px solid #5b9fe8 !important;
+            color: #ffffff !important;
+          }
+          div[data-testid="stForm"] [data-testid="stMarkdownContainer"] p {
+            color: #a8c0e8;
+          }
+          .stTabs [data-baseweb="tab-list"] {
+            gap: 0.3rem;
+          }
+          .stTabs [data-baseweb="tab"] {
+            background: #141f39;
+            border: 1px solid #2d4573;
+            border-radius: 10px;
+            color: #cfe1ff;
+            padding: 0.3rem 0.7rem;
+          }
+          .stTabs [aria-selected="true"] {
+            background: #1f3a66 !important;
+            border-color: #4e7fc7 !important;
+            color: #f1f7ff !important;
+          }
+          div[data-testid="stDataFrame"] div[role="table"] {
+            border: 1px solid #2b426f;
+            border-radius: 10px;
+          }
+          [data-testid="stCodeBlockContainer"] pre {
+            background: #0f172a !important;
+            border: 1px solid #2b426f !important;
+            color: #e3edff !important;
+          }
           div[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #edf5ef 0%, #f9faf8 100%);
-            border-right: 1px solid #dde8df;
+            background:
+              radial-gradient(680px 260px at 120% -10%, rgba(81, 137, 219, 0.18), transparent 72%),
+              linear-gradient(180deg, #0c1529 0%, #091124 100%);
+            border-right: 1px solid #21345b;
+          }
+          section[data-testid="stSidebar"] {
+            background:
+              radial-gradient(680px 260px at 120% -10%, rgba(81, 137, 219, 0.18), transparent 72%),
+              linear-gradient(180deg, #0c1529 0%, #091124 100%);
           }
           div[data-testid="stSidebar"] * {
-            color: #173622;
+            color: #d6e6ff !important;
+          }
+          div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+            color: #d6e6ff !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="radio"] label {
+            background: #15233f;
+            border: 1px solid #2f4c7f;
+            border-radius: 8px;
+            padding: 0.2rem 0.45rem;
+            margin-right: 0.25rem;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="radio"] input:checked + div {
+            color: #ffffff !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] > div,
+          div[data-testid="stSidebar"] [data-baseweb="textarea"] > div {
+            background: #111c34 !important;
+            border: 1px solid #35548c !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] [data-baseweb="input-suffix"] {
+            background: transparent !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] [data-baseweb="input-suffix"] button {
+            background: transparent !important;
+            border: none !important;
+            color: #e5efff !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] [data-baseweb="input-suffix"] svg {
+            fill: #e5efff !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] input,
+          div[data-testid="stSidebar"] [data-baseweb="textarea"] textarea {
+            color: #ecf3ff !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] input::placeholder,
+          div[data-testid="stSidebar"] [data-baseweb="textarea"] textarea::placeholder {
+            color: #91abd4 !important;
+          }
+          div[data-testid="stSidebar"] button {
+            background: linear-gradient(120deg, #245ca5, #1e8e9a) !important;
+            border: 1px solid #2f6ec0 !important;
+            color: #f1f8ff !important;
+          }
+          div[data-testid="stSidebar"] button:hover {
+            border: 1px solid #5ea1e8 !important;
+          }
+          section[data-testid="stSidebar"] hr {
+            border-color: #253d68 !important;
           }
           .mono {
             font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 0.82rem;
+            color: #b9d0f4;
           }
         </style>
         """,
@@ -196,46 +411,83 @@ def _render_auth_gate(auth: LocalAuthStore):
         """,
         unsafe_allow_html=True,
     )
-    tab_login, tab_signup = st.tabs(["Login", "Sign Up"])
+    outer_left, outer_center, outer_right = st.columns([0.16, 1.0, 0.16], gap="small")
+    with outer_center:
+        info_col, form_col = st.columns([0.92, 1.08], gap="large")
 
-    with tab_login:
-        with st.form("login_form"):
-            email = st.text_input("Email", placeholder="you@company.com").strip()
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Sign In", width="stretch")
-            if submitted:
-                user, msg = auth.authenticate(email=email, password=password)
-                if user is None:
-                    st.error(msg)
-                else:
-                    st.session_state["auth_user_id"] = user.id
-                    st.session_state["auth_last_seen"] = _utc_now().isoformat()
-                    st.success("Signed in.")
-                    st.rerun()
+        with info_col:
+            st.markdown(
+                """
+                <div class="auth-info-card">
+                  <p class="auth-info-title">Before you start</p>
+                  <p class="auth-info-body">
+                    Use your local account to access analysis runs. This deployment stores users in local SQLite.
+                    For production rollout, migrate users to Postgres and managed secrets.
+                  </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                """
+                <div class="auth-info-card">
+                  <p class="auth-info-title">Security defaults</p>
+                  <p class="auth-info-body">
+                    12+ character passwords, PBKDF2 hashing, automatic lockout after failed attempts, and
+                    timed sessions.
+                  </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    with tab_signup:
-        with st.form("signup_form"):
-            full_name = st.text_input("Full Name", placeholder="Priyansh Sarvaiya").strip()
-            email = st.text_input("Work Email", placeholder="you@company.com").strip()
-            password = st.text_input("Create Password", type="password")
-            confirm = st.text_input("Confirm Password", type="password")
-            accepted = st.checkbox("I understand this is a local auth store for this machine.")
-            submitted = st.form_submit_button("Create Account", width="stretch")
-            if submitted:
-                if not accepted:
-                    st.error("Please confirm local auth usage.")
-                elif password != confirm:
-                    st.error("Passwords do not match.")
-                else:
-                    issues = validate_password_strength(password)
-                    if issues:
-                        st.error(" ".join(issues))
-                    else:
-                        ok, msg = auth.create_user(email=email, full_name=full_name, password=password)
-                        if not ok:
+        with form_col:
+            mode = st.radio(
+                "Authentication Mode",
+                ["Login", "Sign Up"],
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+            st.markdown(f'<p class="auth-form-title">{mode}</p>', unsafe_allow_html=True)
+
+            if mode == "Login":
+                with st.form("login_form"):
+                    email = st.text_input("Email", placeholder="you@company.com").strip()
+                    password = st.text_input("Password", type="password")
+                    submitted = st.form_submit_button("Sign In", width="stretch")
+                    if submitted:
+                        user, msg = auth.authenticate(email=email, password=password)
+                        if user is None:
                             st.error(msg)
                         else:
-                            st.success("Account created. You can log in now.")
+                            st.session_state["auth_user_id"] = user.id
+                            st.session_state["auth_last_seen"] = _utc_now().isoformat()
+                            st.success("Signed in.")
+                            st.rerun()
+            else:
+                with st.form("signup_form"):
+                    full_name = st.text_input("Full Name", placeholder="Firstname Lastname").strip()
+                    email = st.text_input("Work Email", placeholder="you@company.com").strip()
+                    password = st.text_input("Create Password", type="password")
+                    confirm = st.text_input("Confirm Password", type="password")
+                    accepted = st.checkbox("I understand this is a local auth store for this machine.")
+                    st.caption("Password needs 12+ chars with upper, lower, number, and special character.")
+                    submitted = st.form_submit_button("Create Account", width="stretch")
+                    if submitted:
+                        if not accepted:
+                            st.error("Please confirm local auth usage.")
+                        elif password != confirm:
+                            st.error("Passwords do not match.")
+                        else:
+                            issues = validate_password_strength(password)
+                            if issues:
+                                st.error(" ".join(issues))
+                            else:
+                                ok, msg = auth.create_user(email=email, full_name=full_name, password=password)
+                                if not ok:
+                                    st.error(msg)
+                                else:
+                                    st.success("Account created. You can log in now.")
 
 
 def _render_results(run_dir: Path, fallback_question: str) -> None:
