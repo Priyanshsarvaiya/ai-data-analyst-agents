@@ -18,6 +18,14 @@ Install dependencies:
 
 `streamlit run app/streamlit_app.py`
 
+Optional auth hardening env vars:
+
+`export AUTH_PASSWORD_PEPPER="replace-with-long-random-secret"`
+
+`export AUTH_SESSION_TTL_MIN=240`
+
+`export MAX_UPLOAD_MB=50`
+
 ## 3) Run CSV Pipeline
 
 `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/sample_ecommerce_data.csv --question "Why did India have less revenue than other countries?"`
