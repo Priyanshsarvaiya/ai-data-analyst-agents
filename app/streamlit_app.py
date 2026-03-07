@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 import pandas as pd
@@ -348,6 +349,74 @@ def _safe_read_json(path: Path) -> dict:
     return json.loads(_safe_read_text(path))
 
 
+_EV_INLINE_PATTERN = re.compile(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]|\[\[EV-([a-f0-9]{10})\]\]")
+_EV_INDEX_ROW_PATTERN = re.compile(
+    r"^\|?\s*(EV-[a-f0-9]{10})\s*\|\s*([^|]*)\|\s*([^|]*)\|\s*([^|]*)\|\s*(.*)$"
+)
+
+
+def _format_report_for_display(report: str) -> str:
+    text = (report or "").strip()
+    if not text:
+        return text
+
+    # New format already present.
+    if "## 9) Evidence References" in text:
+        return text
+
+    tags = _EV_INLINE_PATTERN.findall(text)
+    ordered_ids: list[str] = []
+    ev_to_num: dict[str, int] = {}
+    for a, b in tags:
+        ev_id = a or (f"EV-{b}" if b else "")
+        if not ev_id:
+            continue
+        if ev_id not in ev_to_num:
+            ev_to_num[ev_id] = len(ordered_ids) + 1
+            ordered_ids.append(ev_id)
+
+    if not ordered_ids:
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        ev_id = match.group(1) or (f"EV-{match.group(2)}" if match.group(2) else "")
+        if not ev_id:
+            return ""
+        return f"[{ev_to_num[ev_id]}]"
+
+    out = _EV_INLINE_PATTERN.sub(_replace, text).rstrip()
+
+    row_map: dict[str, dict[str, str]] = {}
+    for ln in text.splitlines():
+        m = _EV_INDEX_ROW_PATTERN.match(ln.strip())
+        if not m:
+            continue
+        ev_id = m.group(1)
+        row_map[ev_id] = {
+            "kind": m.group(2).strip(),
+            "artifact": m.group(3).strip(),
+            "pointer": m.group(4).strip(),
+            "summary": m.group(5).strip(),
+        }
+
+    lines = [
+        "## 9) Evidence References",
+        "| Ref | Evidence ID | Artifact | Pointer | Summary |",
+        "|---|---|---|---|---|",
+    ]
+    for ev_id in ordered_ids:
+        n = ev_to_num[ev_id]
+        meta = row_map.get(ev_id, {})
+        artifact = meta.get("artifact", "-").replace("|", "/")
+        pointer = meta.get("pointer", "-").replace("|", "/")
+        summary = meta.get("summary", "").replace("|", "/")
+        if not summary:
+            summary = meta.get("kind", "legacy evidence ref")
+        lines.append(f"| [{n}] | {ev_id} | {artifact} | {pointer} | {summary} |")
+
+    return out + "\n\n" + "\n".join(lines) + "\n"
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -545,7 +614,8 @@ def _render_results(run_dir: Path, fallback_question: str) -> None:
     with tabs[1]:
         st.markdown("## Final Report")
         if report_p.exists():
-            st.markdown(_safe_read_text(report_p))
+            raw_report = _safe_read_text(report_p)
+            st.markdown(_format_report_for_display(raw_report))
         else:
             st.warning("final_report.md not found.")
 

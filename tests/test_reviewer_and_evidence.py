@@ -61,3 +61,25 @@ def test_reviewer_passes_when_claims_have_valid_refs(tmp_path) -> None:
     out = ReviewerAgent().run(ctx)
     assert out["status"] == "pass"
     assert out["missing_refs"] == []
+
+
+def test_reviewer_passes_with_numeric_citations_and_reference_table(tmp_path) -> None:
+    ctx = _base_ctx(tmp_path)
+    ev = ctx["evidence"].add(kind="metric", artifact_path="x.json", pointer="value", summary="x")
+    ctx["store"].write_text(
+        "final_report.md",
+        (
+            "# Data Analysis Report\n\n"
+            "## 1) Executive Summary\n- Revenue is 100 [1]\n"
+            "## 2) Question Answer (Evidence)\n- Supported [1]\n"
+            "## 5) Analysis Outputs\n- Value is 50 [1]\n"
+            "## 9) Evidence References\n"
+            "| Ref | Evidence ID | Artifact | Pointer | Summary |\n"
+            "|---|---|---|---|---|\n"
+            f"| [1] | {ev.id} | x.json | value | x |\n"
+        ),
+    )
+
+    out = ReviewerAgent().run(ctx)
+    assert out["status"] == "pass"
+    assert out["missing_refs"] == []

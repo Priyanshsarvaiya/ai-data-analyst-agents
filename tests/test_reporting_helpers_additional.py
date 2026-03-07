@@ -5,10 +5,12 @@ import re
 from ai_data_analyst_agents.agents.reporting import (
     _build_deterministic_report,
     _compact_json,
+    _format_evidence_citations,
     _normalize_evidence_tags,
     _pointer_value,
     _report_needs_fallback,
 )
+from ai_data_analyst_agents.core.evidence import EvidenceRef
 
 
 def test_normalize_evidence_tags_variants() -> None:
@@ -110,3 +112,31 @@ def test_build_deterministic_report_uses_grouped_entity_from_question() -> None:
     assert "## 1) Executive Summary" in report
     assert "## 8) Artifacts Index" in report
     assert "[[EV:EV-aaaaaaaaaa]]" in report
+
+
+def test_format_evidence_citations_replaces_inline_tags_with_numeric_refs() -> None:
+    report = (
+        "# Data Analysis Report\n\n"
+        "## 1) Executive Summary\n- Revenue is 100 [[EV:EV-aaaaaaaaaa]] and 50 [[EV:EV-bbbbbbbbbb]]\n"
+    )
+    refs = {
+        "EV-aaaaaaaaaa": EvidenceRef(
+            id="EV-aaaaaaaaaa",
+            kind="metric",
+            artifact_path="x.json",
+            pointer="value",
+            summary="x",
+        ),
+        "EV-bbbbbbbbbb": EvidenceRef(
+            id="EV-bbbbbbbbbb",
+            kind="metric",
+            artifact_path="y.json",
+            pointer=None,
+            summary="y",
+        ),
+    }
+    out = _format_evidence_citations(report, refs)
+    assert "[[EV:" not in out
+    assert "[1]" in out and "[2]" in out
+    assert "## 9) Evidence References" in out
+    assert "| [1] | EV-aaaaaaaaaa | x.json | value | x |" in out

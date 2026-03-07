@@ -94,7 +94,8 @@ def test_reporting_agent_deterministic_fallback_with_metrics(
     assert "## 1) Executive Summary" in report
     assert "## 8) Artifacts Index" in report
     assert "India" in report
-    assert "[[EV:" in report
+    assert "## 9) Evidence References" in report
+    assert "[1]" in report
     assert ctx["store"].path("final_report.md").exists()
 
 
@@ -121,7 +122,8 @@ def test_reporting_agent_fallback_when_llm_raises(
     report = ReportingAgent().run(ctx)
     assert "Data Analysis Report" in report
     assert "India" in report
-    assert "[[EV:" in report
+    assert "## 9) Evidence References" in report
+    assert "[1]" in report
 
 
 def test_reporting_agent_works_without_computed_metrics(

@@ -4,6 +4,7 @@ import json
 import re
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.evidence import EvidenceRef
 from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
 from ai_data_analyst_agents.core.security import redact_payload_for_llm
 
@@ -75,6 +76,8 @@ Produce exactly these sections in this order:
 - Only include evidence IDs that were referenced in the report.
 """
 
+EV_TAG_PATTERN = re.compile(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]|\[\[EV-([a-f0-9]{10})\]\]")
+
 
 def _safe_read_json(path) -> Any:
     try:
@@ -119,6 +122,48 @@ def _normalize_evidence_tags(text: str) -> str:
     out = re.sub(r"\[\[EV-([a-f0-9]{10})\]\]", r"[[EV:EV-\1]]", text)
     out = re.sub(r"\[\[(EV-[a-f0-9]{10})\]\]", r"[[EV:\1]]", out)
     return out
+
+
+def _format_evidence_citations(report: str, evidence_refs: Dict[str, EvidenceRef]) -> str:
+    report = (report or "").strip()
+    if not report:
+        return report
+
+    order: list[str] = []
+    ev_to_num: dict[str, int] = {}
+
+    def _replace(match: re.Match[str]) -> str:
+        ev_id = match.group(1) or (f"EV-{match.group(2)}" if match.group(2) else "")
+        if not ev_id:
+            return ""
+        if ev_id not in ev_to_num:
+            ev_to_num[ev_id] = len(order) + 1
+            order.append(ev_id)
+        return f"[{ev_to_num[ev_id]}]"
+
+    body = EV_TAG_PATTERN.sub(_replace, report)
+    body = re.sub(r"\n## 9\) Evidence References.*\Z", "", body, flags=re.DOTALL).rstrip()
+
+    if not order:
+        return body + "\n"
+
+    lines = [
+        "## 9) Evidence References",
+        "| Ref | Evidence ID | Artifact | Pointer | Summary |",
+        "|---|---|---|---|---|",
+    ]
+    for ev_id in order:
+        num = ev_to_num[ev_id]
+        ev = evidence_refs.get(ev_id)
+        if ev is None:
+            lines.append(f"| [{num}] | {ev_id} | - | - | Missing evidence ID |")
+            continue
+        pointer = (ev.pointer if ev.pointer is not None else "null").replace("|", "/")
+        summary = (ev.summary or "").replace("\n", " ").replace("|", "/").strip()
+        artifact = (ev.artifact_path or "").replace("|", "/").strip()
+        lines.append(f"| [{num}] | {ev_id} | {artifact} | {pointer} | {summary} |")
+
+    return body + "\n\n" + "\n".join(lines) + "\n"
 
 
 def _report_section(report: str, heading: str) -> str:
@@ -707,6 +752,7 @@ class ReportingAgent(Agent):
                 evidence_payloads=evidence_payloads,
             )
             report_md = _normalize_evidence_tags(report_md)
+        report_md = _format_evidence_citations(report_md, evidence_store.all())
         logger.info("[OpenRouter] Report generated.")
 
         store.write_text("final_report.md", report_md)

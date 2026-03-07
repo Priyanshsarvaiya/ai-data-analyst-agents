@@ -29,7 +29,8 @@ def test_sql_pipeline_end_to_end(sqlite_star_db, patch_llm, patch_pipeline_cfg: 
 
     report = (run_dir / "final_report.md").read_text(encoding="utf-8")
     assert "India" in report
-    assert "[[EV:" in report
+    assert "## 9) Evidence References" in report
+    assert "[1]" in report
 
 
 def test_sql_pipeline_invalid_source_raises(patch_llm, patch_pipeline_cfg: Path, tmp_path: Path) -> None:

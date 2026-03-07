@@ -41,7 +41,8 @@ def test_csv_pipeline_end_to_end_outputs(
         "## 8) Artifacts Index",
     ]:
         assert section in report
-    assert re.search(r"\[\[EV:(EV-[a-f0-9]{10})\]\]", report)
+    assert "## 9) Evidence References" in report
+    assert re.search(r"\[\d+\]", report)
 
     review = read_json(run_dir / "review_log.json")
     assert review["status"] in {"pass", "warn"}
