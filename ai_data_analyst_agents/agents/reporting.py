@@ -714,8 +714,6 @@ class ReportingAgent(Agent):
         # Inject the business question into the system prompt (safer than relying on user msg)
         system_prompt = SYSTEM_PROMPT.format(business_question=business_question)
 
-        client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
-
         messages = [
             {"role": "system", "content": system_prompt},
             {
@@ -733,6 +731,7 @@ class ReportingAgent(Agent):
         logger.info("[OpenRouter] Calling LLM for report generation...")
         report_md = ""
         try:
+            client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
             report_md = client.chat(
                 model=cfg.llm.model,
                 messages=messages,

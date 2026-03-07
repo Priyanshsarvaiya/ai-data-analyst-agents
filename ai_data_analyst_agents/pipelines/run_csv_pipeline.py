@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
@@ -26,9 +27,13 @@ from ai_data_analyst_agents.agents.reporting import ReportingAgent
 from ai_data_analyst_agents.agents.reviewer import ReviewerAgent
 
 
-def run_pipeline(file_path: str, business_question: str) -> Path:
+def run_pipeline(
+    file_path: str,
+    business_question: str,
+    artifact_callback: Callable[[Path, Path], None] | None = None,
+) -> Path:
     cfg = load_app_cfg()
-    store = ArtifactStore.create(cfg.runtime.artifacts_dir)
+    store = ArtifactStore.create(cfg.runtime.artifacts_dir, on_artifact_written=artifact_callback)
     logger = setup_logging(cfg.runtime.log_level, store.path("logs.txt"))
 
     logger.info(f"Run dir: {store.run_dir}")

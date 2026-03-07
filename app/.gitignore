@@ -1,0 +1,31 @@
+# ---- Common ----
+.DS_Store
+*.log
+*.tmp
+
+# ---- Python backend ----
+backend/.env
+backend/.venv/
+backend/venv/
+backend/**/*.pyc
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/.mypy_cache/
+
+# Local auth/db scratch files (if any created under app/)
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+
+# ---- Node frontend ----
+frontend/.env
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+
+# ---- Optional local uploads/artifacts inside app ----
+uploads/
+tmp/
+artifacts/

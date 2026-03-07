@@ -4,6 +4,7 @@ import argparse
 import re
 from dataclasses import asdict
 from pathlib import Path
+from typing import Callable
 
 from ai_data_analyst_agents.agents.eda import EDAAgent
 from ai_data_analyst_agents.agents.intake import IntakeAgent
@@ -33,9 +34,10 @@ def run_pipeline(
     business_question: str,
     base_table: str | None = None,
     preview_rows: int | None = None,
+    artifact_callback: Callable[[Path, Path], None] | None = None,
 ) -> Path:
     cfg = load_app_cfg()
-    store = ArtifactStore.create(cfg.runtime.artifacts_dir)
+    store = ArtifactStore.create(cfg.runtime.artifacts_dir, on_artifact_written=artifact_callback)
     logger = setup_logging(cfg.runtime.log_level, store.path("logs.txt"))
 
     logger.info(f"Run dir: {store.run_dir}")

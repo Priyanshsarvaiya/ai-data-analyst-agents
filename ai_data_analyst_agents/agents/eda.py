@@ -182,6 +182,7 @@ class EDAAgent(Agent):
             if chart_name:
                 charts.append(chart_name)
                 question_aware_charts.append(chart_name)
+                store.register_file(f"charts/{chart_name}")
 
         # Generic fallback only when no question-aware visuals were generated.
         if not question_aware_charts:
@@ -189,6 +190,7 @@ class EDAAgent(Agent):
                 name = save_histogram(df, col, charts_dir)
                 if name:
                     charts.append(name)
+                    store.register_file(f"charts/{name}")
 
             for col in cat_cols:
                 nunique = int(df[col].nunique(dropna=True))
@@ -196,6 +198,7 @@ class EDAAgent(Agent):
                     name = save_bar_top_categories(df, col, charts_dir, top_k=15)
                     if name:
                         charts.append(name)
+                        store.register_file(f"charts/{name}")
                 if len(charts) >= cfg.eda.max_plots:
                     break
 

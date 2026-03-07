@@ -10,18 +10,20 @@ import tempfile
 import pandas as pd
 import streamlit as st
 
-from ai_data_analyst_agents.core.local_auth import LocalAuthStore, validate_password_strength
 from ai_data_analyst_agents.core.security import sanitize_user_error_message
 from ai_data_analyst_agents.core.settings import load_app_cfg
 from ai_data_analyst_agents.core.sql_source import SQLDataSource, choose_primary_table
 from ai_data_analyst_agents.pipelines.run_csv_pipeline import run_pipeline as run_csv_pipeline
 from ai_data_analyst_agents.pipelines.run_sql_pipeline import run_pipeline as run_sql_pipeline
+try:
+    from app.postgres_auth import PostgresAuthStore, load_auth_settings, validate_password_strength
+    from app.run_tracking import RunTrackingStore, execute_tracked_run
+except ModuleNotFoundError:
+    from postgres_auth import PostgresAuthStore, load_auth_settings, validate_password_strength
+    from run_tracking import RunTrackingStore, execute_tracked_run
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTH_DB_PATH = ROOT / "data" / "local_auth.db"
-AUTH_SESSION_TTL_MIN = int(os.getenv("AUTH_SESSION_TTL_MIN", "240"))
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
 
 os.chdir(ROOT)
 
@@ -127,36 +129,6 @@ def _inject_styles() -> None:
             color: var(--muted);
             font-size: 0.92rem;
           }
-          .stat-chip {
-            display: inline-block;
-            background: rgba(74, 168, 255, 0.16);
-            border: 1px solid rgba(74, 168, 255, 0.34);
-            color: #d8ebff;
-            padding: 0.16rem 0.52rem;
-            border-radius: 999px;
-            font-size: 0.76rem;
-            margin-right: 0.3rem;
-            margin-top: 0.25rem;
-          }
-          .auth-info-card {
-            border: 1px solid #2f4779;
-            background: linear-gradient(145deg, rgba(25, 38, 69, 0.95), rgba(18, 28, 50, 0.95));
-            border-radius: 18px;
-            padding: 0.95rem 1rem;
-            margin-top: 0.25rem;
-          }
-          .auth-info-title {
-            margin: 0;
-            color: #e3f0ff;
-            font-size: 1rem;
-            font-weight: 700;
-          }
-          .auth-info-body {
-            margin: 0.42rem 0 0;
-            color: #a8c0e8;
-            font-size: 0.89rem;
-            line-height: 1.45;
-          }
           .auth-form-title {
             margin: 0.2rem 0 0.45rem;
             color: #dceaff;
@@ -214,9 +186,6 @@ def _inject_styles() -> None:
           div[data-baseweb="textarea"] > div {
             background: #10192f !important;
             border: 1px solid #39538a !important;
-          }
-          div[data-baseweb="checkbox"] label span {
-            color: #c7daf7 !important;
           }
           button {
             border-radius: 10px !important;
@@ -424,16 +393,31 @@ def _utc_now() -> datetime:
 def _init_session_state() -> None:
     st.session_state.setdefault("auth_user_id", None)
     st.session_state.setdefault("auth_last_seen", None)
+    st.session_state.setdefault("selected_run_dir", None)
+    st.session_state.setdefault("selected_run_question", "")
 
 
 def _clear_auth_session() -> None:
     st.session_state["auth_user_id"] = None
     st.session_state["auth_last_seen"] = None
+    st.session_state["selected_run_dir"] = None
+    st.session_state["selected_run_question"] = ""
 
 
 @st.cache_resource
-def _get_auth_store() -> LocalAuthStore:
-    return LocalAuthStore(db_path=AUTH_DB_PATH)
+def _get_auth_store() -> PostgresAuthStore:
+    auth_cfg = _get_auth_cfg()
+    if not auth_cfg.resolved_database_url:
+        raise RuntimeError(
+            "AUTH_DATABASE_URL/DATABASE_URL is not configured. Set it in your environment or .env file."
+        )
+    return PostgresAuthStore(
+        database_url=auth_cfg.resolved_database_url,
+        pepper=auth_cfg.AUTH_PASSWORD_PEPPER,
+        iterations=int(auth_cfg.AUTH_PASSWORD_HASH_ITERATIONS),
+        lock_after_failures=int(auth_cfg.AUTH_LOCKOUT_ATTEMPTS),
+        lock_minutes=int(auth_cfg.AUTH_LOCKOUT_MINUTES),
+    )
 
 
 @st.cache_resource
@@ -441,7 +425,23 @@ def _get_app_cfg():
     return load_app_cfg()
 
 
-def _current_user(auth: LocalAuthStore):
+@st.cache_resource
+def _get_auth_cfg():
+    return load_auth_settings()
+
+
+@st.cache_resource
+def _get_run_store() -> RunTrackingStore:
+    auth_cfg = _get_auth_cfg()
+    if not auth_cfg.resolved_database_url:
+        raise RuntimeError(
+            "AUTH_DATABASE_URL/DATABASE_URL is not configured. Set it in your environment or .env file."
+        )
+    return RunTrackingStore(database_url=auth_cfg.resolved_database_url)
+
+
+def _current_user(auth: PostgresAuthStore):
+    auth_cfg = _get_auth_cfg()
     user_id = st.session_state.get("auth_user_id")
     if not user_id:
         return None
@@ -453,7 +453,7 @@ def _current_user(auth: LocalAuthStore):
             last_seen = datetime.fromisoformat(last_seen_raw)
         except Exception:
             last_seen = now
-        if now - last_seen > timedelta(minutes=AUTH_SESSION_TTL_MIN):
+        if now - last_seen > timedelta(minutes=int(auth_cfg.AUTH_SESSION_TTL_MIN)):
             _clear_auth_session()
             return None
 
@@ -466,97 +466,61 @@ def _current_user(auth: LocalAuthStore):
     return user
 
 
-def _render_auth_gate(auth: LocalAuthStore):
+def _render_auth_gate(auth: PostgresAuthStore):
     st.markdown(
         """
         <div class="auth-shell">
           <h2 class="auth-title">Secure Workspace Access</h2>
-          <p class="auth-note">Create a local account or sign in. Passwords are hashed with PBKDF2 and account lockout is enabled after repeated failures.</p>
-          <span class="stat-chip">PBKDF2 hashing</span>
-          <span class="stat-chip">SQLite local store</span>
-          <span class="stat-chip">Lockout policy</span>
-          <span class="stat-chip">Session timeout</span>
+          <p class="auth-note">Sign in or create an account to continue.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    outer_left, outer_center, outer_right = st.columns([0.16, 1.0, 0.16], gap="small")
-    with outer_center:
-        info_col, form_col = st.columns([0.92, 1.08], gap="large")
+    _, center_col, _ = st.columns([0.2, 1.0, 0.2], gap="small")
+    with center_col:
+        mode = st.radio(
+            "Authentication Mode",
+            ["Login", "Sign Up"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        st.markdown(f'<p class="auth-form-title">{mode}</p>', unsafe_allow_html=True)
 
-        with info_col:
-            st.markdown(
-                """
-                <div class="auth-info-card">
-                  <p class="auth-info-title">Before you start</p>
-                  <p class="auth-info-body">
-                    Use your local account to access analysis runs. This deployment stores users in local SQLite.
-                    For production rollout, migrate users to Postgres and managed secrets.
-                  </p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                """
-                <div class="auth-info-card">
-                  <p class="auth-info-title">Security defaults</p>
-                  <p class="auth-info-body">
-                    12+ character passwords, PBKDF2 hashing, automatic lockout after failed attempts, and
-                    timed sessions.
-                  </p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        with form_col:
-            mode = st.radio(
-                "Authentication Mode",
-                ["Login", "Sign Up"],
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-            st.markdown(f'<p class="auth-form-title">{mode}</p>', unsafe_allow_html=True)
-
-            if mode == "Login":
-                with st.form("login_form"):
-                    email = st.text_input("Email", placeholder="you@company.com").strip()
-                    password = st.text_input("Password", type="password")
-                    submitted = st.form_submit_button("Sign In", width="stretch")
-                    if submitted:
-                        user, msg = auth.authenticate(email=email, password=password)
-                        if user is None:
-                            st.error(msg)
+        if mode == "Login":
+            with st.form("login_form"):
+                email = st.text_input("Email", placeholder="you@company.com").strip()
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Sign In", width="stretch")
+                if submitted:
+                    user, msg = auth.authenticate(email=email, password=password)
+                    if user is None:
+                        st.error(msg)
+                    else:
+                        st.session_state["auth_user_id"] = user.id
+                        st.session_state["auth_last_seen"] = _utc_now().isoformat()
+                        st.success("Signed in.")
+                        st.rerun()
+        else:
+            with st.form("signup_form"):
+                full_name = st.text_input("Full Name", placeholder="Firstname Lastname").strip()
+                email = st.text_input("Work Email", placeholder="you@company.com").strip()
+                password = st.text_input("Create Password", type="password")
+                confirm = st.text_input("Confirm Password", type="password")
+                st.caption("Use 12+ chars with upper, lower, number, and special character.")
+                submitted = st.form_submit_button("Create Account", width="stretch")
+                if submitted:
+                    if password != confirm:
+                        st.error("Passwords do not match.")
+                    else:
+                        issues = validate_password_strength(password)
+                        if issues:
+                            st.error(" ".join(issues))
                         else:
-                            st.session_state["auth_user_id"] = user.id
-                            st.session_state["auth_last_seen"] = _utc_now().isoformat()
-                            st.success("Signed in.")
-                            st.rerun()
-            else:
-                with st.form("signup_form"):
-                    full_name = st.text_input("Full Name", placeholder="Firstname Lastname").strip()
-                    email = st.text_input("Work Email", placeholder="you@company.com").strip()
-                    password = st.text_input("Create Password", type="password")
-                    confirm = st.text_input("Confirm Password", type="password")
-                    accepted = st.checkbox("I understand this is a local auth store for this machine.")
-                    st.caption("Password needs 12+ chars with upper, lower, number, and special character.")
-                    submitted = st.form_submit_button("Create Account", width="stretch")
-                    if submitted:
-                        if not accepted:
-                            st.error("Please confirm local auth usage.")
-                        elif password != confirm:
-                            st.error("Passwords do not match.")
-                        else:
-                            issues = validate_password_strength(password)
-                            if issues:
-                                st.error(" ".join(issues))
+                            ok, msg = auth.create_user(email=email, full_name=full_name, password=password)
+                            if not ok:
+                                st.error(msg)
                             else:
-                                ok, msg = auth.create_user(email=email, full_name=full_name, password=password)
-                                if not ok:
-                                    st.error(msg)
-                                else:
-                                    st.success("Account created. You can log in now.")
+                                st.success("Account created. You can log in now.")
 
 
 def _render_results(run_dir: Path, fallback_question: str) -> None:
@@ -654,8 +618,11 @@ def _render_results(run_dir: Path, fallback_question: str) -> None:
             st.info("logs.txt not found.")
 
 
-def _render_workspace(user) -> None:
+def _render_workspace(user, run_store: RunTrackingStore) -> None:
     cfg = _get_app_cfg()
+    auth_cfg = _get_auth_cfg()
+    max_upload_mb = int(auth_cfg.MAX_UPLOAD_MB)
+    session_ttl_min = int(auth_cfg.AUTH_SESSION_TTL_MIN)
 
     st.markdown(
         """
@@ -670,10 +637,56 @@ def _render_workspace(user) -> None:
     st.sidebar.markdown("### Workspace")
     st.sidebar.write(f"**Signed in:** {user.full_name}")
     st.sidebar.caption(user.email)
-    st.sidebar.markdown('<span class="mono">Session timeout: 240 minutes</span>', unsafe_allow_html=True)
+    st.sidebar.markdown(
+        f'<span class="mono">Session timeout: {session_ttl_min} minutes</span>',
+        unsafe_allow_html=True,
+    )
     if st.sidebar.button("Logout", width="stretch"):
         _clear_auth_session()
         st.rerun()
+
+    recent_runs = run_store.list_runs_for_user(user_id=int(user.id), limit=6)
+    if recent_runs:
+        def _short_question(run_obj, limit: int = 72) -> str:
+            q = str(run_obj.run_metadata.get("business_question", "")).strip()
+            if not q:
+                q = "Untitled question"
+            if len(q) <= limit:
+                return q
+            return q[: limit - 1].rstrip() + "…"
+
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### Recent Runs")
+        for rr in recent_runs:
+            st.sidebar.caption(
+                f"{_short_question(rr)} | {rr.status} | {rr.created_at[:19]}"
+            )
+        run_lookup = {
+            f"{_short_question(rr, 52)} | {rr.status} | {rr.created_at[:19]}": rr.run_uuid
+            for rr in recent_runs
+        }
+        selected = st.sidebar.selectbox(
+            "Open Previous Run",
+            options=[""] + list(run_lookup.keys()),
+            index=0,
+        )
+        if selected and st.sidebar.button("Load Selected Run", width="stretch"):
+            detail = run_store.get_run_details_for_user(
+                user_id=int(user.id),
+                run_uuid=run_lookup[selected],
+            )
+            if detail is None:
+                st.sidebar.error("Run not found.")
+            else:
+                run_dir = Path(str(detail.run.run_metadata.get("run_dir", "")))
+                if not run_dir.exists():
+                    st.sidebar.error("Run directory no longer exists on disk.")
+                else:
+                    st.session_state["selected_run_dir"] = str(run_dir)
+                    st.session_state["selected_run_question"] = str(
+                        detail.run.run_metadata.get("business_question", "")
+                    )
+                    st.rerun()
 
     st.sidebar.markdown("---")
     source_type = st.sidebar.radio("Data source", ["CSV", "SQL"], index=0, horizontal=True)
@@ -708,8 +721,8 @@ def _render_workspace(user) -> None:
         if source_type == "CSV":
             if uploaded is not None:
                 size_mb = uploaded.size / (1024 * 1024)
-                if size_mb > MAX_UPLOAD_MB:
-                    st.error(f"File too large ({size_mb:.1f} MB). Limit is {MAX_UPLOAD_MB} MB.")
+                if size_mb > max_upload_mb:
+                    st.error(f"File too large ({size_mb:.1f} MB). Limit is {max_upload_mb} MB.")
                 else:
                     st.caption(f"{uploaded.name} • {size_mb:.2f} MB")
                     try:
@@ -751,6 +764,8 @@ def _render_workspace(user) -> None:
 
     st.markdown("---")
     st.subheader("Results")
+    selected_run_dir = st.session_state.get("selected_run_dir")
+    selected_run_question = st.session_state.get("selected_run_question", "")
 
     if run_btn:
         if not question.strip():
@@ -758,37 +773,75 @@ def _render_workspace(user) -> None:
             st.stop()
 
         try:
+            run_metadata = {
+                "business_question": question.strip(),
+                "source_type": source_type.lower(),
+            }
             if source_type == "CSV":
                 if uploaded is None:
                     st.error("Please upload a CSV file.")
                     st.stop()
                 size_mb = uploaded.size / (1024 * 1024)
-                if size_mb > MAX_UPLOAD_MB:
-                    st.error(f"File too large ({size_mb:.1f} MB). Limit is {MAX_UPLOAD_MB} MB.")
+                if size_mb > max_upload_mb:
+                    st.error(f"File too large ({size_mb:.1f} MB). Limit is {max_upload_mb} MB.")
                     st.stop()
                 with st.spinner("Saving uploaded CSV..."):
                     tmp_dir = Path(tempfile.mkdtemp(prefix="ai_analyst_"))
                     safe_name = Path(uploaded.name).name
                     csv_path = tmp_dir / safe_name
                     csv_path.write_bytes(uploaded.getvalue())
+                run_metadata["source_name"] = safe_name
+                run_metadata["file_path"] = str(csv_path)
+
                 with st.spinner("Running CSV pipeline..."):
-                    run_dir = run_csv_pipeline(str(csv_path), question.strip())
+                    run_row, run_dir = execute_tracked_run(
+                        run_store=run_store,
+                        user_id=int(user.id),
+                        source_type="csv",
+                        source_name=safe_name,
+                        run_metadata=run_metadata,
+                        runner=lambda artifact_cb: run_csv_pipeline(
+                            str(csv_path),
+                            question.strip(),
+                            artifact_callback=artifact_cb,
+                        ),
+                    )
             else:
                 if not db_url.strip():
                     st.error("Please enter a database URL.")
                     st.stop()
+                run_metadata["source_name"] = base_table.strip() or "sql_source"
+                run_metadata["analysis_table"] = base_table.strip() or None
+
                 with st.spinner("Running SQL pipeline..."):
-                    run_dir = run_sql_pipeline(
-                        db_url=db_url.strip(),
-                        business_question=question.strip(),
-                        base_table=base_table.strip() or None,
+                    run_row, run_dir = execute_tracked_run(
+                        run_store=run_store,
+                        user_id=int(user.id),
+                        source_type="sql",
+                        source_name=base_table.strip() or "sql_source",
+                        run_metadata=run_metadata,
+                        runner=lambda artifact_cb: run_sql_pipeline(
+                            db_url=db_url.strip(),
+                            business_question=question.strip(),
+                            base_table=base_table.strip() or None,
+                            artifact_callback=artifact_cb,
+                        ),
                     )
         except Exception as e:
             st.error(f"Pipeline failed: {sanitize_user_error_message(e)}")
             st.stop()
 
-        st.success(f"Done. Run folder: {run_dir}")
+        st.success(f"Done. Run folder: {run_dir} | Run ID: {run_row.run_uuid}")
+        st.session_state["selected_run_dir"] = str(run_dir)
+        st.session_state["selected_run_question"] = question.strip()
         _render_results(Path(run_dir), question.strip())
+    elif selected_run_dir:
+        run_path = Path(str(selected_run_dir))
+        if run_path.exists():
+            st.info(f"Showing previous run: {run_path.name}")
+            _render_results(run_path, str(selected_run_question))
+        else:
+            st.warning("Selected run folder no longer exists.")
     else:
         st.info("Ready. Configure source + question, then run.")
 
@@ -797,12 +850,21 @@ def main() -> None:
     _inject_styles()
     _init_session_state()
 
-    auth = _get_auth_store()
+    try:
+        auth = _get_auth_store()
+        run_store = _get_run_store()
+    except Exception as e:
+        st.error(f"Authentication store initialization failed: {sanitize_user_error_message(e)}")
+        st.info(
+            "Set `AUTH_DATABASE_URL` (or `DATABASE_URL`) and restart Streamlit. "
+            "Example: postgresql+psycopg://USER:PASSWORD@HOST:5432/DB_NAME"
+        )
+        return
     user = _current_user(auth)
     if user is None:
         _render_auth_gate(auth)
         return
-    _render_workspace(user)
+    _render_workspace(user, run_store)
 
 
 if __name__ == "__main__":

@@ -782,7 +782,6 @@ class PlannerAgent(Agent):
 
         raw = ""
         llm_tasks: List[Dict[str, Any]] = []
-        client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
         payload = {
             "business_question": question,
             "schema": {"columns": schema_cols, "dtypes": schema_dtypes},
@@ -792,6 +791,7 @@ class PlannerAgent(Agent):
         }
 
         try:
+            client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
             logger.info("[Planner] Calling OpenRouter for task plan...")
             raw = client.chat(
                 model=cfg.llm.model,

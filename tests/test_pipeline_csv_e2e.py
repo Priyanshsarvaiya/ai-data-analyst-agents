@@ -135,3 +135,29 @@ def test_csv_pipeline_writes_failed_manifest_when_stage_breaks(
     manifest = read_json(run_dir / "run_manifest.json")
     assert manifest["status"] == "failed"
     assert (run_dir / "agent_messages.json").exists()
+
+
+def test_csv_pipeline_emits_artifact_callbacks(
+    sample_csv_path: Path,
+    patch_llm,
+    patch_pipeline_cfg: Path,
+) -> None:
+    seen: list[str] = []
+
+    def _artifact_cb(run_dir: Path, artifact_path: Path) -> None:
+        try:
+            rel = artifact_path.relative_to(run_dir).as_posix()
+        except Exception:
+            rel = artifact_path.as_posix()
+        seen.append(rel)
+
+    run_dir = Path(
+        run_pipeline(
+            str(sample_csv_path),
+            "Why did India have less revenue than other countries?",
+            artifact_callback=_artifact_cb,
+        )
+    )
+    assert run_dir.exists()
+    assert "final_report.md" in seen
+    assert "run_manifest.json" in seen

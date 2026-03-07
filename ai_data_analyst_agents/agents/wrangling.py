@@ -21,6 +21,7 @@ class WranglingAgent(Agent):
         }
 
         clean.to_csv(store.path("cleaned.csv"), index=False)
+        store.register_file("cleaned.csv")
         store.write_json("feature_log.json", feature_log)
 
         # Make cleaned df available to later agents

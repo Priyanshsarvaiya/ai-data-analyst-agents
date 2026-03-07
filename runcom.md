@@ -26,6 +26,10 @@ Optional auth hardening env vars:
 
 `export MAX_UPLOAD_MB=50`
 
+Postgres auth DB connection (used by Streamlit login/signup):
+
+`export AUTH_DATABASE_URL="postgresql+psycopg://ai_analyst_app:change-this-strong-password@localhost:5432/ai_analyst"`
+
 ## 3) Run CSV Pipeline
 
 `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/sample_ecommerce_data.csv --question "Why did India have less revenue than other countries?"`

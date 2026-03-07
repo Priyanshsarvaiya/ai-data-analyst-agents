@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from ai_data_analyst_agents.core.local_auth import (
-    LocalAuthStore,
+import pytest
+
+from app.postgres_auth import (
+    PostgresAuthStore,
     normalize_email,
     validate_email,
     validate_password_strength,
@@ -20,8 +22,9 @@ def test_password_strength_rules() -> None:
     assert validate_password_strength("StrongPass1!") == []
 
 
-def test_local_auth_create_and_authenticate(tmp_path) -> None:
-    auth = LocalAuthStore(db_path=tmp_path / "auth.db", iterations=100_000)
+def test_postgres_auth_create_and_authenticate(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'auth.db').as_posix()}"
+    auth = PostgresAuthStore(database_url=db_url, iterations=120_000)
     ok, _ = auth.create_user(
         email="analyst@example.com",
         full_name="Data Analyst",
@@ -35,8 +38,9 @@ def test_local_auth_create_and_authenticate(tmp_path) -> None:
     assert "Authenticated" in msg
 
 
-def test_local_auth_rejects_duplicate_email(tmp_path) -> None:
-    auth = LocalAuthStore(db_path=tmp_path / "auth.db", iterations=100_000)
+def test_postgres_auth_rejects_duplicate_email(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'auth.db').as_posix()}"
+    auth = PostgresAuthStore(database_url=db_url, iterations=120_000)
     ok1, _ = auth.create_user(
         email="analyst@example.com",
         full_name="Analyst One",
@@ -52,10 +56,23 @@ def test_local_auth_rejects_duplicate_email(tmp_path) -> None:
     assert "already exists" in msg2
 
 
-def test_local_auth_lockout_after_failed_attempts(tmp_path) -> None:
-    auth = LocalAuthStore(
-        db_path=tmp_path / "auth.db",
-        iterations=100_000,
+def test_postgres_auth_rejects_weak_password(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'auth.db').as_posix()}"
+    auth = PostgresAuthStore(database_url=db_url, iterations=120_000)
+    ok, msg = auth.create_user(
+        email="analyst@example.com",
+        full_name="Analyst One",
+        password="weak",
+    )
+    assert not ok
+    assert "Password must" in msg
+
+
+def test_postgres_auth_lockout_after_failed_attempts(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'auth.db').as_posix()}"
+    auth = PostgresAuthStore(
+        database_url=db_url,
+        iterations=120_000,
         lock_after_failures=3,
         lock_minutes=1,
     )
@@ -73,3 +90,8 @@ def test_local_auth_lockout_after_failed_attempts(tmp_path) -> None:
     user, msg = auth.authenticate(email="analyst@example.com", password="StrongPass1!")
     assert user is None
     assert "Too many failed attempts" in msg
+
+
+def test_postgres_auth_requires_database_url() -> None:
+    with pytest.raises(RuntimeError, match="AUTH_DATABASE_URL or DATABASE_URL"):
+        PostgresAuthStore(database_url="")

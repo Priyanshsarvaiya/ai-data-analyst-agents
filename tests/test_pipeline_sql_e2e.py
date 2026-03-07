@@ -49,3 +49,26 @@ def test_db_url_redaction() -> None:
     redacted = _redact_db_url(url)
     assert "secret" not in redacted
     assert "user:***@" in redacted
+
+
+def test_sql_pipeline_emits_artifact_callbacks(sqlite_star_db, patch_llm, patch_pipeline_cfg: Path) -> None:
+    seen: list[str] = []
+
+    def _artifact_cb(run_dir: Path, artifact_path: Path) -> None:
+        try:
+            rel = artifact_path.relative_to(run_dir).as_posix()
+        except Exception:
+            rel = artifact_path.as_posix()
+        seen.append(rel)
+
+    run_dir = Path(
+        run_pipeline(
+            db_url=f"sqlite:///{sqlite_star_db}",
+            business_question="Why did India have less revenue than other countries?",
+            base_table="orders",
+            artifact_callback=_artifact_cb,
+        )
+    )
+    assert run_dir.exists()
+    assert "final_report.md" in seen
+    assert "run_manifest.json" in seen
