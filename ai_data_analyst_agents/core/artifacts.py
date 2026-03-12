@@ -29,12 +29,14 @@ class ArtifactStore:
 
     def write_json(self, name: str, obj: Any) -> Path:
         p = self.run_dir / name
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
         self._notify(p)
         return p
 
     def write_text(self, name: str, text: str) -> Path:
         p = self.run_dir / name
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
         self._notify(p)
         return p

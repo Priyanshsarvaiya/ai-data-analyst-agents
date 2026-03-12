@@ -255,7 +255,11 @@ The system consists of the following specialized agents:
 - A/B test evaluation
 
 **Output:**
-- `stat_results.json`
+- `statistics/<task_id>_<method>/summary.json`
+- `statistics/<task_id>_<method>/assumptions.json`
+- `statistics/<task_id>_<method>/results.md`
+- `statistics/<task_id>_<method>/coefficients.csv` (regression only)
+- `statistics/<task_id>_<method>/diagnostics.json` (regression only)
 
 ---
 
@@ -310,6 +314,17 @@ ai-data-analyst-agents/
     plotting_tools.py
     sql_tools.py
     validation_tools.py
+  ai_data_analyst_agents/statistics/
+    models.py
+    assumptions.py
+    hypothesis_tests.py
+    confidence_intervals.py
+    effect_sizes.py
+    ab_testing.py
+    regression.py
+    selector.py
+    limitations.py
+    artifacts.py
   pipelines/
     run_csv_pipeline.py
     run_sql_pipeline.py
@@ -405,6 +420,32 @@ Introduce statistical rigor and experiment evaluation.
 - All statistical claims include assumptions
 - No false or exaggerated significance
 - Statistical limitations explicitly documented in reports
+
+### Phase 4 Example Questions
+- `Did treatment improve conversion versus control?`
+- `Is average order value different between segment A and segment B?`
+- `Which variables are most associated with revenue? Use regression.`
+
+### Phase 4 Example Commands
+- `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/ab_conversion_demo.csv --question "Did treatment improve conversion versus control?"`
+- `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/mean_comparison_demo.csv --question "Is average order value different between segment A and segment B?"`
+- `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/regression_demo.csv --question "Which variables are most associated with revenue? Use regression."`
+
+### Statistical Artifact Layout
+```
+artifacts/run_YYYYMMDD_HHMMSS/
+  statistics/
+    T7_two_proportion_z_test/
+      summary.json
+      assumptions.json
+      results.md
+    T8_ols/
+      summary.json
+      assumptions.json
+      coefficients.csv
+      diagnostics.json
+      results.md
+```
 
 ---
 
@@ -567,13 +608,13 @@ For questions, issues, or suggestions:
 ---
 
 ### 🔵 Phase 4 – Statistical Intelligence Layer
-- [ ] Hypothesis testing module
-- [ ] Confidence interval reporting
-- [ ] Effect size calculation
-- [ ] A/B testing workflow
-- [ ] Basic regression (OLS) integration
-- [ ] Assumption validation & statistical guardrails
-- [ ] Explicit statistical limitations section in reports
+- [✅] Hypothesis testing module
+- [✅] Confidence interval reporting
+- [✅] Effect size calculation
+- [✅] A/B testing workflow
+- [✅] Basic regression (OLS) integration
+- [✅] Assumption validation & statistical guardrails
+- [✅] Explicit statistical limitations section in reports
 
 ---
 

@@ -141,3 +141,50 @@ def test_planner_drops_unsafe_sql_query_from_llm(
 
     plan = PlannerAgent().run(ctx)
     assert all(t["type"] != "sql_query" for t in plan["tasks"])
+
+
+def test_planner_adds_ab_test_for_experiment_questions(tmp_path, ab_test_df: pd.DataFrame, patch_llm) -> None:
+    question = "Did treatment improve conversion versus control?"
+    ctx = _make_ctx(tmp_path, ab_test_df, question)
+    profile = {
+        "columns": ab_test_df.columns.tolist(),
+        "dtypes": {c: str(ab_test_df[c].dtype) for c in ab_test_df.columns},
+        "datetime_candidates": detect_probable_datetime_columns(ab_test_df),
+        "column_profiles": infer_column_profiles(ab_test_df),
+    }
+    ctx["memory"].set("result.profiling", profile)
+
+    plan = PlannerAgent().run(ctx)
+    assert any(t["type"] == "ab_test" for t in plan["tasks"])
+
+
+def test_planner_adds_regression_for_association_questions(tmp_path, regression_df: pd.DataFrame, patch_llm) -> None:
+    question = "Which variables are most associated with revenue? Use regression."
+    ctx = _make_ctx(tmp_path, regression_df, question)
+    profile = {
+        "columns": regression_df.columns.tolist(),
+        "dtypes": {c: str(regression_df[c].dtype) for c in regression_df.columns},
+        "datetime_candidates": detect_probable_datetime_columns(regression_df),
+        "column_profiles": infer_column_profiles(regression_df),
+    }
+    ctx["memory"].set("result.profiling", profile)
+
+    plan = PlannerAgent().run(ctx)
+    regression_tasks = [t for t in plan["tasks"] if t["type"] == "ols_regression"]
+    assert regression_tasks
+    assert regression_tasks[0]["params"]["target"] == "revenue"
+
+
+def test_planner_does_not_add_generic_stat_test_for_why_customer_question(tmp_path, sample_df: pd.DataFrame, patch_llm) -> None:
+    question = "Identify high-value customers and why."
+    ctx = _make_ctx(tmp_path, sample_df, question)
+    profile = {
+        "columns": sample_df.columns.tolist(),
+        "dtypes": {c: str(sample_df[c].dtype) for c in sample_df.columns},
+        "datetime_candidates": detect_probable_datetime_columns(sample_df),
+        "column_profiles": infer_column_profiles(sample_df),
+    }
+    ctx["memory"].set("result.profiling", profile)
+
+    plan = PlannerAgent().run(ctx)
+    assert all(t["type"] != "statistical_test" for t in plan["tasks"])

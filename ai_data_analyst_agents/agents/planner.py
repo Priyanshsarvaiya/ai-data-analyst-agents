@@ -32,7 +32,7 @@ JSON OUTPUT SCHEMA
   "tasks": [
     {
       "id": "T1",
-      "type": "groupby_agg" | "groupby2_agg" | "filter_agg" | "correlation" | "distribution" | "group_distribution" | "recency_by_group" | "topk" | "timeseries_agg" | "sql_query" | "sql_join_profile" | "kpi_template_apply" | "metric_definition" | "segment_analysis" | "cohort_analysis",
+      "type": "groupby_agg" | "groupby2_agg" | "filter_agg" | "correlation" | "distribution" | "group_distribution" | "recency_by_group" | "topk" | "timeseries_agg" | "sql_query" | "sql_join_profile" | "kpi_template_apply" | "metric_definition" | "segment_analysis" | "cohort_analysis" | "statistical_test" | "ab_test" | "ols_regression",
       "params": {}
     }
   ],
@@ -55,6 +55,9 @@ TASK PARAM SCHEMAS
 13) metric_definition: {name, metric_col?, expression?, agg?, group_by?}
 14) segment_analysis: {segment_by, metric, agg?, limit?}
 15) cohort_analysis: {entity_col, date_col, freq?}
+16) statistical_test: {group_col, metric, group_a?, group_b?, compare_to_rest?, paired?, pair_id_col?, success_value?, alpha?, alternative?}
+17) ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?}
+18) ols_regression: {target, predictors, alpha?}
 
 HEURISTICS
 - Always include direct answer tasks first.
@@ -75,6 +78,23 @@ PRODUCT_KEYWORDS = {"product", "category", "categories", "sku", "item", "items"}
 TIME_KEYWORDS = {"trend", "over time", "monthly", "weekly", "daily", "season", "cohort", "recency", "lifetime"}
 SEGMENT_KEYWORDS = {"segment", "segments", "percentile", "quantile", "top", "bottom", "distribution"}
 SQL_KEYWORDS = {"sql", "database", "table", "join", "joins", "postgres", "postgresql", "sqlite"}
+STAT_KEYWORDS = {
+    "significant",
+    "statistically",
+    "confidence",
+    "interval",
+    "uncertainty",
+    "p-value",
+    "p value",
+    "hypothesis",
+    "experiment",
+    "a/b",
+    "ab test",
+    "test",
+    "lift",
+}
+AB_KEYWORDS = {"experiment", "treatment", "control", "variant", "a/b", "ab test", "lift", "conversion"}
+REGRESSION_KEYWORDS = {"regression", "predict", "predictor", "predictors", "association", "associated", "relationship"}
 PREFERRED_METRICS = [
     "revenue",
     "sales",
@@ -95,6 +115,9 @@ PREFERRED_SEGMENTS = [
     "customer_id",
 ]
 DRIVER_COLS = ["quantity", "unit_price", "discount_pct", "discount", "price", "units"]
+AB_GROUP_COL_CANDIDATES = ["variant", "experiment_group", "treatment_group", "treatment", "group", "arm", "bucket"]
+PAIR_ID_CANDIDATES = ["customer_id", "user_id", "account_id", "session_id", "order_id"]
+CONVERSION_COL_CANDIDATES = ["converted", "conversion", "is_conversion", "converted_flag", "purchased", "clicked"]
 ALLOWED_TASK_TYPES = {
     "groupby_agg",
     "groupby2_agg",
@@ -111,6 +134,9 @@ ALLOWED_TASK_TYPES = {
     "metric_definition",
     "segment_analysis",
     "cohort_analysis",
+    "statistical_test",
+    "ab_test",
+    "ols_regression",
 }
 
 
@@ -248,6 +274,66 @@ def _choose_secondary_dim(question: str, schema_cols: List[str], primary_dim: st
     return None
 
 
+def _choose_experiment_group_col(
+    schema_cols: List[str],
+    column_profiles: List[Dict[str, Any]],
+) -> str | None:
+    for cand in AB_GROUP_COL_CANDIDATES:
+        if cand in schema_cols:
+            return cand
+    for prof in column_profiles:
+        name = str(prof.get("name", ""))
+        examples = {str(v).strip().lower() for v in prof.get("example_values", []) or []}
+        if {"control", "treatment"} & examples or {"a", "b"} <= examples:
+            if name in schema_cols:
+                return name
+    return None
+
+
+def _extract_experiment_labels(column_profiles: List[Dict[str, Any]], group_col: str | None) -> tuple[str | None, str | None]:
+    if not group_col:
+        return None, None
+    for prof in column_profiles:
+        if str(prof.get("name")) != group_col:
+            continue
+        values = [str(v).strip() for v in (prof.get("example_values") or []) if str(v).strip()]
+        values_lc = [v.lower() for v in values]
+        if "control" in values_lc and "treatment" in values_lc:
+            return values[values_lc.index("control")], values[values_lc.index("treatment")]
+        if "a" in values_lc and "b" in values_lc:
+            return values[values_lc.index("a")], values[values_lc.index("b")]
+        if len(values) >= 2:
+            return values[0], values[1]
+    return None, None
+
+
+def _choose_binary_metric(schema_cols: List[str], question: str, numeric_cols: List[str]) -> str | None:
+    q = question.lower()
+    for cand in CONVERSION_COL_CANDIDATES:
+        if cand in schema_cols:
+            return cand
+    for col in schema_cols:
+        if col.lower() in q and any(tok in col.lower() for tok in ["convert", "click", "purchase", "signup", "churn"]):
+            return col
+    for col in numeric_cols:
+        if any(tok in col.lower() for tok in ["flag", "binary", "indicator"]):
+            return col
+    return None
+
+
+def _choose_regression_predictors(numeric_cols: List[str], target: str | None) -> List[str]:
+    out: List[str] = []
+    for cand in DRIVER_COLS + ["discount_pct", "discount", "customer_age", "tenure_days", "sessions"]:
+        if cand in numeric_cols and cand != target and cand not in out:
+            out.append(cand)
+    for col in numeric_cols:
+        if col != target and col not in out:
+            out.append(col)
+        if len(out) >= 4:
+            break
+    return out[:4]
+
+
 def _sanitize_and_number_tasks(
     tasks: List[Dict[str, Any]],
     schema_cols: List[str],
@@ -377,6 +463,40 @@ def _sanitize_and_number_tasks(
                 continue
             p.setdefault("freq", "M")
 
+        elif ttype == "statistical_test":
+            if p.get("group_col") not in schema_cols:
+                continue
+            if p.get("metric") not in schema_cols:
+                continue
+            if p.get("pair_id_col") and p.get("pair_id_col") not in schema_cols:
+                continue
+            p.setdefault("alpha", 0.05)
+            p.setdefault("alternative", "two-sided")
+            p["compare_to_rest"] = bool(p.get("compare_to_rest", False))
+            p["paired"] = bool(p.get("paired", False))
+
+        elif ttype == "ab_test":
+            if p.get("group_col") not in schema_cols:
+                continue
+            if p.get("metric") not in schema_cols:
+                continue
+            if "control" not in p or "treatment" not in p:
+                continue
+            p.setdefault("metric_type", "auto")
+            p.setdefault("alpha", 0.05)
+
+        elif ttype == "ols_regression":
+            if p.get("target") not in numeric_cols:
+                continue
+            predictors = p.get("predictors", [])
+            if not isinstance(predictors, list):
+                continue
+            predictors = [str(x) for x in predictors if str(x) in schema_cols and str(x) != str(p["target"])]
+            if not predictors:
+                continue
+            p["predictors"] = predictors
+            p.setdefault("alpha", 0.05)
+
         clean.append({"type": ttype, "params": p})
 
     out: List[Dict[str, Any]] = []
@@ -419,6 +539,9 @@ def _build_heuristic_tasks(
     product_intent = _contains_any(q, PRODUCT_KEYWORDS)
     time_intent = _contains_any(q, TIME_KEYWORDS)
     segment_intent = _contains_any(q, SEGMENT_KEYWORDS) or customer_intent
+    stat_intent = _contains_any(q, STAT_KEYWORDS)
+    ab_intent = _contains_any(q, AB_KEYWORDS)
+    regression_intent = _contains_any(q, REGRESSION_KEYWORDS)
 
     tasks: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -569,6 +692,47 @@ def _build_heuristic_tasks(
             "cohort_analysis",
             {"entity_col": entity_col, "date_col": cohort_date_col, "freq": "M"},
         )
+
+    experiment_group_col = _choose_experiment_group_col(schema_cols, column_profiles)
+    control_label, treatment_label = _extract_experiment_labels(column_profiles, experiment_group_col)
+    binary_metric = _choose_binary_metric(schema_cols, question, numeric_cols)
+    if ab_intent and experiment_group_col and metric:
+        _add_task(
+            tasks,
+            seen,
+            "ab_test",
+            {
+                "group_col": experiment_group_col,
+                "control": control_label or "control",
+                "treatment": treatment_label or "treatment",
+                "metric": binary_metric or metric,
+                "metric_type": "binary" if binary_metric else "continuous",
+                "success_value": 1,
+                "alpha": 0.05,
+            },
+        )
+
+    if stat_intent and primary_dim and metric:
+        stat_params: Dict[str, Any] = {
+            "group_col": primary_dim,
+            "metric": binary_metric or metric,
+            "alpha": 0.05,
+            "alternative": "two-sided",
+        }
+        if focus_value is not None:
+            stat_params["group_a"] = focus_value
+            stat_params["compare_to_rest"] = True
+        _add_task(tasks, seen, "statistical_test", stat_params)
+
+    if regression_intent and metric:
+        predictors = _choose_regression_predictors(numeric_cols, metric)
+        if predictors:
+            _add_task(
+                tasks,
+                seen,
+                "ols_regression",
+                {"target": metric, "predictors": predictors, "alpha": 0.05},
+            )
 
     return tasks
 

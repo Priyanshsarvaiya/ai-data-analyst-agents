@@ -25,6 +25,8 @@ def test_csv_pipeline_end_to_end_outputs(
         "feature_log.json",
         "analysis_tasks.json",
         "metrics_outputs.json",
+        "next_steps_plan.json",
+        "next_steps_metrics_outputs.json",
         "eda_summary.json",
         "final_report.md",
         "review_log.json",
@@ -38,10 +40,9 @@ def test_csv_pipeline_end_to_end_outputs(
         "## 1) Executive Summary",
         "## 2) Question Answer (Evidence)",
         "## 5) Analysis Outputs",
-        "## 8) Artifacts Index",
     ]:
         assert section in report
-    assert "## 9) Evidence References" in report
+    assert "## 8) Evidence References" in report
     assert re.search(r"\[\d+\]", report)
 
     review = read_json(run_dir / "review_log.json")
@@ -161,3 +162,26 @@ def test_csv_pipeline_emits_artifact_callbacks(
     assert run_dir.exists()
     assert "final_report.md" in seen
     assert "run_manifest.json" in seen
+
+
+def test_csv_pipeline_generates_statistical_artifacts_for_ab_question(
+    ab_test_csv_path: Path,
+    patch_llm,
+    patch_pipeline_cfg: Path,
+) -> None:
+    run_dir = Path(run_pipeline(str(ab_test_csv_path), "Did treatment improve conversion versus control?"))
+    plan = read_json(run_dir / "analysis_tasks.json")
+    assert any(t["type"] == "ab_test" for t in plan["tasks"])
+
+    metrics = read_json(run_dir / "metrics_outputs.json")
+    stat_artifacts = [
+        item["artifact"]
+        for item in metrics.get("computed", [])
+        if str(item.get("artifact", "")).startswith("statistics/") and "two_proportion_z_test" in str(item.get("artifact", ""))
+    ]
+    report = (run_dir / "final_report.md").read_text(encoding="utf-8")
+
+    assert stat_artifacts
+    assert (run_dir / stat_artifacts[0]).exists()
+    assert "### Statistical Questions Evaluated" in report
+    assert "### Confidence Intervals" in report

@@ -69,6 +69,63 @@ def sample_csv_path(tmp_path: Path, sample_df: pd.DataFrame) -> Path:
 
 
 @pytest.fixture
+def ab_test_df() -> pd.DataFrame:
+    control_conv = [0] * 78 + [1] * 22
+    treatment_conv = [0] * 65 + [1] * 35
+    rows = []
+    for idx, value in enumerate(control_conv):
+        rows.append(
+            {
+                "user_id": f"U{idx:04d}",
+                "variant": "control",
+                "conversion": value,
+                "revenue": 95.0 + (idx % 7),
+                "session_duration": 45.0 + (idx % 9),
+                "order_date": (pd.Timestamp("2024-02-01") + pd.Timedelta(days=idx % 14)).strftime("%Y-%m-%d"),
+            }
+        )
+    offset = len(rows)
+    for idx, value in enumerate(treatment_conv):
+        rows.append(
+            {
+                "user_id": f"U{idx + offset:04d}",
+                "variant": "treatment",
+                "conversion": value,
+                "revenue": 102.0 + (idx % 7),
+                "session_duration": 49.0 + (idx % 9),
+                "order_date": (pd.Timestamp("2024-02-01") + pd.Timedelta(days=idx % 14)).strftime("%Y-%m-%d"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def ab_test_csv_path(tmp_path: Path, ab_test_df: pd.DataFrame) -> Path:
+    p = tmp_path / "ab_test.csv"
+    ab_test_df.to_csv(p, index=False)
+    return p
+
+
+@pytest.fixture
+def regression_df() -> pd.DataFrame:
+    rows = []
+    for i in range(1, 81):
+        marketing_spend = 1000 + 25 * i
+        sessions = 200 + 4 * i + (i % 5) * 3
+        discount_pct = 0.05 if i % 3 == 0 else 0.02
+        revenue = 500 + (0.45 * marketing_spend) + (2.2 * sessions) - (900 * discount_pct)
+        rows.append(
+            {
+                "marketing_spend": float(marketing_spend),
+                "sessions": float(sessions),
+                "discount_pct": float(discount_pct),
+                "revenue": float(revenue),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
 def sqlite_orders_db(tmp_path: Path, sample_df: pd.DataFrame) -> Path:
     db_path = tmp_path / "orders.db"
     con = sqlite3.connect(db_path)

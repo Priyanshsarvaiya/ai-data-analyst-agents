@@ -73,7 +73,7 @@ def test_reviewer_passes_with_numeric_citations_and_reference_table(tmp_path) ->
             "## 1) Executive Summary\n- Revenue is 100 [1]\n"
             "## 2) Question Answer (Evidence)\n- Supported [1]\n"
             "## 5) Analysis Outputs\n- Value is 50 [1]\n"
-            "## 9) Evidence References\n"
+            "## 8) Evidence References\n"
             "| Ref | Evidence ID | Artifact | Pointer | Summary |\n"
             "|---|---|---|---|---|\n"
             f"| [1] | {ev.id} | x.json | value | x |\n"
@@ -83,3 +83,62 @@ def test_reviewer_passes_with_numeric_citations_and_reference_table(tmp_path) ->
     out = ReviewerAgent().run(ctx)
     assert out["status"] == "pass"
     assert out["missing_refs"] == []
+
+
+def test_reviewer_fails_on_statistical_significance_without_ci_and_effects(tmp_path) -> None:
+    ctx = _base_ctx(tmp_path)
+    ev = ctx["evidence"].add(
+        kind="json",
+        artifact_path="statistics/T1_two_proportion_z_test/summary.json",
+        pointer=None,
+        summary="ab test",
+    )
+    ctx["store"].write_text(
+        "final_report.md",
+        (
+            "# Data Analysis Report\n\n"
+            "## 1) Executive Summary\n- The treatment produced a statistically significant improvement [1]\n"
+            "## 2) Question Answer (Evidence)\n- Supported [1]\n"
+            "## 5) Analysis Outputs\n- Statistical result [1]\n"
+            "## 6) Limitations\n- Minimal.\n"
+            "## 8) Evidence References\n"
+            "| Ref | Evidence ID | Artifact | Pointer | Summary |\n"
+            "|---|---|---|---|---|\n"
+            f"| [1] | {ev.id} | statistics/T1_two_proportion_z_test/summary.json | null | ab test |\n"
+        ),
+    )
+
+    out = ReviewerAgent().run(ctx)
+    assert out["status"] == "fail"
+    assert any("p-value, confidence interval, and effect size" in note for note in out["notes"])
+
+
+def test_reviewer_blocks_causal_language_for_statistical_summary(tmp_path) -> None:
+    ctx = _base_ctx(tmp_path)
+    ev = ctx["evidence"].add(
+        kind="json",
+        artifact_path="statistics/T3_ols/summary.json",
+        pointer=None,
+        summary="regression",
+    )
+    ctx["store"].write_text(
+        "final_report.md",
+        (
+            "# Data Analysis Report\n\n"
+            "## 1) Executive Summary\n- Revenue was caused by marketing spend [1]\n"
+            "## 2) Question Answer (Evidence)\n- Supported [1]\n"
+            "## 5) Analysis Outputs\n"
+            "### Confidence Intervals\n- coefficient:marketing_spend [1]\n"
+            "### Effect Sizes\n- r_squared [1]\n"
+            "### Statistical Limitations\n- Observational data only [1]\n"
+            "## 6) Limitations\n- Observational data only.\n"
+            "## 8) Evidence References\n"
+            "| Ref | Evidence ID | Artifact | Pointer | Summary |\n"
+            "|---|---|---|---|---|\n"
+            f"| [1] | {ev.id} | statistics/T3_ols/summary.json | null | regression |\n"
+        ),
+    )
+
+    out = ReviewerAgent().run(ctx)
+    assert out["status"] == "fail"
+    assert any("Causal wording is blocked" in note for note in out["notes"])

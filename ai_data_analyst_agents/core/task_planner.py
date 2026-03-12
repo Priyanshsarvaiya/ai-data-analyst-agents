@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Literal
 
-TaskName = Literal["intake", "profiling", "quality", "wrangling", "eda", "reporting", "reviewer", "planner", "metrics"]
+TaskName = Literal["intake", "profiling", "quality", "wrangling", "eda", "reporting", "reviewer", "planner", "metrics", "next_steps"]
 
 @dataclass(frozen=True)
 class Task:
@@ -34,6 +34,10 @@ def default_tasks_phase2() -> List[Task]:
         Task(
             "metrics",
             "Execute planned analytical computations, produce metric artifacts, and register evidence references."
+        ),
+        Task(
+            "next_steps",
+            "Expand the initial analysis with dynamic follow-up computations so recommended next steps are executed before final reporting."
         ),
         Task(
             "eda",

@@ -15,6 +15,8 @@ NON-NEGOTIABLE RULES
 - Do NOT invent metrics, numbers, columns, entities, or trends not present in the context.
 - Every numeric value or concrete claim MUST include an evidence tag like [[EV:EV-xxxxxxxxxx]].
 - If you cannot support a claim with evidence, write EXACTLY: "Not computed in artifacts."
+- For statistical results, never use causal wording unless the study design explicitly justifies it in artifacts.
+- Do not call a result significant without including p-value context plus confidence interval/effect-size support.
 - Prefer computed metric artifacts (metrics_outputs.json, *_filter_*.json, *_groupby_*.json, *_corr_*.json) over descriptive summaries.
 - Use `evidence_payloads` values directly whenever available; do not claim values are missing if payloads contain them.
 - Do not include generic boilerplate. Every sentence must either (a) answer the business question, or (b) justify limitations/next steps.
@@ -59,21 +61,28 @@ Produce exactly these sections in this order:
   - filter aggregations (e.g., India revenue)
   - correlations (if computed)
   - distributions/quantiles (if computed)
+  - statistical analyses (if computed)
 - Each bullet must cite evidence.
 - If metrics tasks failed, state that and reference the failure entries (if present).
+- If statistical outputs exist, add compact markdown subsections inside section 5 with these exact headings when relevant:
+  - `### Statistical Questions Evaluated`
+  - `### Methods Chosen and Why`
+  - `### Assumption Checks`
+  - `### Results`
+  - `### Confidence Intervals`
+  - `### Effect Sizes`
+  - `### A/B Test Readout`
+  - `### Regression Findings`
 
 ## 6) Limitations
 - Must be specific to missing artifacts/failed computations.
 - Include at most 5 bullets.
 - If everything needed exists, keep this section minimal.
+- If statistical outputs exist, include a `### Statistical Limitations` subsection and keep wording conservative.
 
 ## 7) Next Steps
 - Must be actionable computations or checks that would strengthen the answer.
 - Tie each next step to the business question.
-
-## 8) Artifacts Index
-- Provide a compact table: Evidence ID | Kind | Artifact | Pointer | Summary
-- Only include evidence IDs that were referenced in the report.
 """
 
 EV_TAG_PATTERN = re.compile(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]|\[\[EV-([a-f0-9]{10})\]\]")
@@ -142,13 +151,13 @@ def _format_evidence_citations(report: str, evidence_refs: Dict[str, EvidenceRef
         return f"[{ev_to_num[ev_id]}]"
 
     body = EV_TAG_PATTERN.sub(_replace, report)
-    body = re.sub(r"\n## 9\) Evidence References.*\Z", "", body, flags=re.DOTALL).rstrip()
+    body = re.sub(r"\n## [89]\) Evidence References.*\Z", "", body, flags=re.DOTALL).rstrip()
 
     if not order:
         return body + "\n"
 
     lines = [
-        "## 9) Evidence References",
+        "## 8) Evidence References",
         "| Ref | Evidence ID | Artifact | Pointer | Summary |",
         "|---|---|---|---|---|",
     ]
@@ -208,6 +217,146 @@ def _report_needs_fallback(report: str, metrics_out: Dict[str, Any], evidence_pa
     return any(p in s12 for p in bad_phrases)
 
 
+def _extract_statistical_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for entry in entries:
+        payload = entry.get("payload")
+        if isinstance(payload, dict) and payload.get("analysis_type") in {"hypothesis_test", "ab_test", "regression"}:
+            out.append(entry)
+    return out
+
+
+def _format_statistical_subsections(
+    stats_entries: list[dict[str, Any]],
+    tag_fn,
+) -> str:
+    if not stats_entries:
+        return ""
+
+    question_lines: list[str] = []
+    method_lines: list[str] = []
+    assumption_lines: list[str] = []
+    result_lines: list[str] = []
+    ci_lines: list[str] = []
+    effect_lines: list[str] = []
+    ab_lines: list[str] = []
+    regression_lines: list[str] = []
+    limitation_lines: list[str] = []
+
+    for entry in stats_entries:
+        payload = entry.get("payload") or {}
+        ev_tag = tag_fn(entry.get("ev_id"))
+        method = str(payload.get("method", "unknown"))
+        analysis_type = str(payload.get("analysis_type", "statistical"))
+        plain_language = str(payload.get("plain_language", "")).strip()
+        method_reason = str(payload.get("method_reason", "")).strip()
+        question_lines.append(f"- {analysis_type}: {plain_language or 'Computed statistical analysis.'} {ev_tag}".rstrip())
+        method_lines.append(f"- {method}: {method_reason or 'Method rationale not available.'} {ev_tag}".rstrip())
+
+        for check in payload.get("assumptions", []) or []:
+            if not isinstance(check, dict):
+                continue
+            status = check.get("passed")
+            label = "pass" if status is True else ("warn" if status is None else "fail")
+            assumption_lines.append(f"- {check.get('name', 'assumption')} ({label}): {check.get('detail', '')} {ev_tag}".rstrip())
+
+        interpretation = str(payload.get("interpretation", "")).strip()
+        p_value = payload.get("p_value")
+        test_statistic = payload.get("test_statistic")
+        results_text = interpretation or plain_language or "Result computed."
+        if isinstance(p_value, (int, float)):
+            results_text += f" p-value={float(p_value):.4f}."
+        if isinstance(test_statistic, (int, float)):
+            results_text += f" statistic={float(test_statistic):.4f}."
+        result_lines.append(f"- {results_text} {ev_tag}".rstrip())
+
+        for ci in payload.get("confidence_intervals", []) or []:
+            if not isinstance(ci, dict):
+                continue
+            try:
+                ci_lines.append(
+                    f"- {ci.get('parameter')}: {float(ci.get('point_estimate')):.4f} "
+                    f"[{float(ci.get('lower_bound')):.4f}, {float(ci.get('upper_bound')):.4f}] "
+                    f"at {float(ci.get('confidence_level', 0.95)):.0%} {ev_tag}".rstrip()
+                )
+            except Exception:
+                continue
+
+        for eff in payload.get("effect_sizes", []) or []:
+            if not isinstance(eff, dict):
+                continue
+            try:
+                effect_lines.append(
+                    f"- {eff.get('name')}: {float(eff.get('value')):.4f} "
+                    f"({eff.get('interpretation', 'context-dependent')}) {ev_tag}".rstrip()
+                )
+            except Exception:
+                continue
+
+        if analysis_type == "ab_test":
+            metrics = payload.get("metrics", {}) or {}
+            if metrics:
+                ab_lines.append(f"- A/B summary: {metrics} {ev_tag}".rstrip())
+        if analysis_type == "regression":
+            metrics = payload.get("metrics", {}) or {}
+            coeffs = (payload.get("extra_outputs", {}) or {}).get("coefficients", []) or []
+            coeff_preview = coeffs[:3] if isinstance(coeffs, list) else []
+            regression_lines.append(
+                f"- Regression fit: metrics={metrics}; coefficient preview={coeff_preview} {ev_tag}".rstrip()
+            )
+
+        for limitation in payload.get("limitations", []) or []:
+            limitation_lines.append(f"- {limitation} {ev_tag}".rstrip())
+
+    parts = [
+        "### Statistical Questions Evaluated",
+        "\n".join(question_lines) if question_lines else "- None",
+        "",
+        "### Methods Chosen and Why",
+        "\n".join(method_lines) if method_lines else "- None",
+        "",
+        "### Assumption Checks",
+        "\n".join(assumption_lines[:10]) if assumption_lines else "- None",
+        "",
+        "### Results",
+        "\n".join(result_lines) if result_lines else "- None",
+        "",
+        "### Confidence Intervals",
+        "\n".join(ci_lines[:10]) if ci_lines else "- None",
+        "",
+        "### Effect Sizes",
+        "\n".join(effect_lines[:10]) if effect_lines else "- None",
+    ]
+    if ab_lines:
+        parts.extend(["", "### A/B Test Readout", "\n".join(ab_lines[:5])])
+    if regression_lines:
+        parts.extend(["", "### Regression Findings", "\n".join(regression_lines[:5])])
+    if limitation_lines:
+        parts.extend(["", "### Statistical Limitations", "\n".join(limitation_lines[:8])])
+    return "\n".join(parts).strip()
+
+
+def _strip_empty_statistical_subsections(report: str) -> str:
+    if not report.strip():
+        return report
+    patterns = [
+        r"\n### Statistical Questions Evaluated\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### Methods Chosen and Why\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### Assumption Checks\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### Results\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### Confidence Intervals\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### Effect Sizes\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### A/B Test Readout\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### Regression Findings\s*\n(?:- )?Not computed in artifacts\.\s*",
+        r"\n### Statistical Limitations\s*\n(?:- )?Not computed in artifacts\.\s*",
+    ]
+    out = report
+    for pat in patterns:
+        out = re.sub(pat, "\n", out, flags=re.IGNORECASE)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip() + "\n"
+
+
 def _build_deterministic_report(
     business_question: str,
     profile: Dict[str, Any],
@@ -236,6 +385,7 @@ def _build_deterministic_report(
                 "pointer_value": ev.get("pointer_value"),
             }
         )
+    stats_entries = _extract_statistical_entries(entries)
 
     referenced_ids: list[str] = []
     question_lc = business_question.lower()
@@ -462,6 +612,11 @@ def _build_deterministic_report(
         payload = e.get("payload")
         if isinstance(payload, dict) and "filter" in payload and "value" in payload:
             output_lines.append(f"- {e.get('task_id')}: filter={payload.get('filter')} value={payload.get('value')} {ev_tag}")
+        elif isinstance(payload, dict) and payload.get("analysis_type") in {"hypothesis_test", "ab_test", "regression"}:
+            output_lines.append(
+                f"- {e.get('task_id')}: statistical {payload.get('analysis_type')} via {payload.get('method')} "
+                f"(decision={payload.get('decision')}, p-value={payload.get('p_value')}) {ev_tag}"
+            )
         elif isinstance(payload, dict):
             top_items = list(payload.items())[:5]
             output_lines.append(f"- {e.get('task_id')}: top values={top_items} {ev_tag}")
@@ -490,6 +645,19 @@ def _build_deterministic_report(
         limitations.append("- Time-series aggregation was not computed.")
     if not limitations:
         limitations.append("- Core computations needed for this question were generated.")
+    statistical_subsections = _format_statistical_subsections(stats_entries, _tag)
+    if stats_entries and not any("statistical" in lim.lower() for lim in limitations):
+        for entry in stats_entries:
+            payload = entry.get("payload") or {}
+            for lim in payload.get("limitations", []) or []:
+                limitations.append(f"- {lim}")
+        deduped: list[str] = []
+        seen_lim: set[str] = set()
+        for lim in limitations:
+            if lim not in seen_lim:
+                seen_lim.add(lim)
+                deduped.append(lim)
+        limitations = deduped[:8]
 
     next_steps: list[str] = []
     if any("were not computed" in lim for lim in limitations):
@@ -563,17 +731,6 @@ def _build_deterministic_report(
         miss_txt = "0% across all columns" if all(float(v) == 0.0 for v in miss.values()) else "Non-zero missingness detected"
     dup = qa.get("duplicate_rate", "Not computed in artifacts.")
 
-    artifacts_index = []
-    seen_ids = []
-    for ev_id in referenced_ids:
-        if ev_id and ev_id not in seen_ids:
-            seen_ids.append(ev_id)
-    for ev_id in seen_ids:
-        ev = evidence_payloads.get(ev_id, {})
-        artifacts_index.append(f"| {ev_id} | {ev.get('summary', '')} | {ev.get('artifact_path', '')} | {ev.get('pointer', '')} |")
-    if not artifacts_index:
-        artifacts_index = ["| - | - | - | - |"]
-
     failed_txt = "none" if not failed else "; ".join([f"{f.get('task_id')}: {f.get('reason')}" for f in failed[:5]])
 
     return f"""# Data Analysis Report
@@ -599,17 +756,13 @@ Key evidence:
 ## 5) Analysis Outputs
 {chr(10).join(output_lines) if output_lines else "- Not computed in artifacts."}
 - Failed tasks: {failed_txt}
+{chr(10) + chr(10) + statistical_subsections if statistical_subsections else ""}
 
 ## 6) Limitations
 {chr(10).join(limitations)}
 
 ## 7) Next Steps
 {chr(10).join(next_steps[:5])}
-
-## 8) Artifacts Index
-| Evidence ID | Summary | Artifact | Pointer |
-|---|---|---|---|
-{chr(10).join(artifacts_index)}
 """
 
 
@@ -741,6 +894,11 @@ class ReportingAgent(Agent):
         except Exception as e:
             logger.warning(f"[Reporting] OpenRouter call failed: {e}. Falling back to deterministic report.")
         report_md = _normalize_evidence_tags(report_md or "")
+        if not any(
+            isinstance(ev.get("payload"), dict) and ev.get("payload", {}).get("analysis_type") in {"hypothesis_test", "ab_test", "regression"}
+            for ev in evidence_payloads.values()
+        ):
+            report_md = _strip_empty_statistical_subsections(report_md)
         if _report_needs_fallback(report_md, metrics_out or {}, evidence_payloads):
             logger.warning("[Reporting] LLM report incomplete for available metrics. Using deterministic fallback.")
             report_md = _build_deterministic_report(
@@ -751,6 +909,11 @@ class ReportingAgent(Agent):
                 evidence_payloads=evidence_payloads,
             )
             report_md = _normalize_evidence_tags(report_md)
+        if not any(
+            isinstance(ev.get("payload"), dict) and ev.get("payload", {}).get("analysis_type") in {"hypothesis_test", "ab_test", "regression"}
+            for ev in evidence_payloads.values()
+        ):
+            report_md = _strip_empty_statistical_subsections(report_md)
         report_md = _format_evidence_citations(report_md, evidence_store.all())
         logger.info("[OpenRouter] Report generated.")
 

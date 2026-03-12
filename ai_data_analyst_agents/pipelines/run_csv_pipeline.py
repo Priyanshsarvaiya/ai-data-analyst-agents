@@ -23,6 +23,7 @@ from ai_data_analyst_agents.agents.wrangling import WranglingAgent
 from ai_data_analyst_agents.agents.eda import EDAAgent
 from ai_data_analyst_agents.agents.planner import PlannerAgent
 from ai_data_analyst_agents.agents.metrics import MetricsAgent
+from ai_data_analyst_agents.agents.next_steps import NextStepsAgent
 from ai_data_analyst_agents.agents.reporting import ReportingAgent
 from ai_data_analyst_agents.agents.reviewer import ReviewerAgent
 
@@ -64,6 +65,7 @@ def run_pipeline(
         "eda": EDAAgent(),
         "planner": PlannerAgent(),
         "metrics": MetricsAgent(),
+        "next_steps": NextStepsAgent(),
         "reporting": ReportingAgent(),
         "reviewer": ReviewerAgent(),
     }

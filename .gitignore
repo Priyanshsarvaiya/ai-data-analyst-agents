@@ -93,3 +93,6 @@ configs/secrets.yaml
 # ===============================
 .uv/
 poetry.lock
+
+
+skills.md

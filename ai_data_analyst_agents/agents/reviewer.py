@@ -7,6 +7,8 @@ EV_PATTERN = re.compile(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]|\[\[EV-([a-f0-9]{10}
 NUM_PATTERN = re.compile(r"(?<![\w-])\d[\d,]*(?:\.\d+)?")
 CITE_PATTERN = re.compile(r"\[(\d{1,4})\]")
 CITE_MAP_LINE_PATTERN = re.compile(r"^\|\s*\[(\d{1,4})\]\s*\|\s*(EV-[a-f0-9]{10})\s*\|")
+CAUSAL_PATTERN = re.compile(r"\b(caused|causes|proved|proves|guarantees|drives growth|causal(?:ly)?)\b", re.IGNORECASE)
+SIGNIFICANCE_PATTERN = re.compile(r"\b(statistically significant|significant improvement|significant lift)\b", re.IGNORECASE)
 
 
 def _section(text: str, heading: str) -> str:
@@ -15,7 +17,9 @@ def _section(text: str, heading: str) -> str:
 
 
 def _citation_map(report: str) -> dict[int, str]:
-    sec = _section(report, "9) Evidence References")
+    sec = _section(report, "8) Evidence References")
+    if not sec:
+        sec = _section(report, "9) Evidence References")
     out: dict[int, str] = {}
     if not sec:
         return out
@@ -65,6 +69,10 @@ class ReviewerAgent(Agent):
 
         all_ref_ids = [*ev_tags, *citation_ev_ids]
         missing = [ev for ev in all_ref_ids if ev not in evidence_store.all()]
+        referenced_evidence = [evidence_store.all().get(ev_id) for ev_id in set(all_ref_ids) if ev_id in evidence_store.all()]
+        has_statistical_evidence = any(
+            ev is not None and str(ev.artifact_path).startswith("statistics/") for ev in referenced_evidence
+        ) or "### Statistical Questions Evaluated" in report
 
         status = "pass"
         notes = []
@@ -95,6 +103,39 @@ class ReviewerAgent(Agent):
                 "Numeric claims without evidence tag found in key sections: "
                 + "; ".join(offenders[:5])
             )
+
+        if has_statistical_evidence:
+            if not _section(report, "6) Limitations").strip():
+                status = "fail"
+                notes.append("Statistical reporting requires an explicit limitations section.")
+            if "### Statistical Limitations" not in report:
+                status = "warn" if status != "fail" else status
+                notes.append("Statistical outputs are present but the report is missing a dedicated statistical limitations subsection.")
+
+            if SIGNIFICANCE_PATTERN.search(report):
+                has_pvalue = bool(re.search(r"\bp-value\b|\bp\s*=\s*\d", report, re.IGNORECASE))
+                has_ci = "### Confidence Intervals" in report
+                has_effect = "### Effect Sizes" in report
+                if not (has_pvalue and has_ci and has_effect):
+                    status = "fail"
+                    notes.append(
+                        "Claims of statistical significance require p-value, confidence interval, and effect size support in the report."
+                    )
+
+            stat_claim_lines = []
+            for block in [
+                _section(report, "1) Executive Summary"),
+                _section(report, "2) Question Answer (Evidence)"),
+                _section(report, "5) Analysis Outputs"),
+            ]:
+                for line in block.splitlines():
+                    if "business question" in line.lower():
+                        continue
+                    stat_claim_lines.append(line)
+            stat_claim_text = "\n".join(stat_claim_lines)
+            if CAUSAL_PATTERN.search(stat_claim_text):
+                status = "fail"
+                notes.append("Causal wording is blocked for statistical summaries unless explicitly justified by the study design.")
 
         out = {
             "status": status,

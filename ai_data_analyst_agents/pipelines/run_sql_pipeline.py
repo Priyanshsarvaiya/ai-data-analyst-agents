@@ -9,6 +9,7 @@ from typing import Callable
 from ai_data_analyst_agents.agents.eda import EDAAgent
 from ai_data_analyst_agents.agents.intake import IntakeAgent
 from ai_data_analyst_agents.agents.metrics import MetricsAgent
+from ai_data_analyst_agents.agents.next_steps import NextStepsAgent
 from ai_data_analyst_agents.agents.planner import PlannerAgent
 from ai_data_analyst_agents.agents.profiling import ProfilingAgent
 from ai_data_analyst_agents.agents.quality import QualityAgent
@@ -93,6 +94,7 @@ def run_pipeline(
         "wrangling": WranglingAgent(),
         "planner": PlannerAgent(),
         "metrics": MetricsAgent(),
+        "next_steps": NextStepsAgent(),
         "eda": EDAAgent(),
         "reporting": ReportingAgent(),
         "reviewer": ReviewerAgent(),

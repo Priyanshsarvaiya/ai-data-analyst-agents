@@ -1,6 +1,8 @@
 # Core Data Processing
 pandas>=2.2.0
 numpy>=1.26.0
+scipy>=1.17.0
+statsmodels>=0.14.6
 
 # Visualization
 matplotlib>=3.8.0

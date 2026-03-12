@@ -330,7 +330,7 @@ def _format_report_for_display(report: str) -> str:
         return text
 
     # New format already present.
-    if "## 9) Evidence References" in text:
+    if "## 8) Evidence References" in text or "## 9) Evidence References" in text:
         return text
 
     tags = _EV_INLINE_PATTERN.findall(text)
@@ -369,7 +369,7 @@ def _format_report_for_display(report: str) -> str:
         }
 
     lines = [
-        "## 9) Evidence References",
+        "## 8) Evidence References",
         "| Ref | Evidence ID | Artifact | Pointer | Summary |",
         "|---|---|---|---|---|",
     ]

@@ -9,6 +9,7 @@ from ai_data_analyst_agents.agents.reporting import (
     _normalize_evidence_tags,
     _pointer_value,
     _report_needs_fallback,
+    _strip_empty_statistical_subsections,
 )
 from ai_data_analyst_agents.core.evidence import EvidenceRef
 
@@ -110,7 +111,7 @@ def test_build_deterministic_report_uses_grouped_entity_from_question() -> None:
     )
     assert re.search(r"India.*rank", report, re.IGNORECASE)
     assert "## 1) Executive Summary" in report
-    assert "## 8) Artifacts Index" in report
+    assert "## 8) Artifacts Index" not in report
     assert "[[EV:EV-aaaaaaaaaa]]" in report
 
 
@@ -138,5 +139,76 @@ def test_format_evidence_citations_replaces_inline_tags_with_numeric_refs() -> N
     out = _format_evidence_citations(report, refs)
     assert "[[EV:" not in out
     assert "[1]" in out and "[2]" in out
-    assert "## 9) Evidence References" in out
+    assert "## 8) Evidence References" in out
     assert "| [1] | EV-aaaaaaaaaa | x.json | value | x |" in out
+
+
+def test_build_deterministic_report_adds_statistical_subsections() -> None:
+    question = "Did treatment improve conversion?"
+    profile = {"n_rows": 200, "n_cols": 4, "columns": ["variant", "conversion", "revenue", "order_date"]}
+    qa = {"missingness": {"variant": 0.0, "conversion": 0.0}, "duplicate_rate": 0.0}
+    metrics_out = {
+        "computed": [{"task_id": "T1", "artifact": "statistics/T1_two_proportion_z_test/summary.json", "evidence_id": "EV-stat000001"}],
+        "failed": [],
+    }
+    evidence_payloads = {
+        "EV-stat000001": {
+            "artifact_path": "statistics/T1_two_proportion_z_test/summary.json",
+            "pointer": None,
+            "summary": "A/B test result",
+            "pointer_value": None,
+            "payload": {
+                "analysis_type": "ab_test",
+                "method": "two_proportion_z_test",
+                "method_reason": "Binary metric comparison across two independent groups.",
+                "plain_language": "The difference is statistically detectable at alpha=0.05 (p=0.0120).",
+                "interpretation": "Treatment conversion exceeds control conversion.",
+                "p_value": 0.012,
+                "test_statistic": 2.51,
+                "assumptions": [{"name": "group_balance", "passed": True, "detail": "Groups are balanced."}],
+                "confidence_intervals": [
+                    {
+                        "parameter": "conversion_rate(treatment) - conversion_rate(control)",
+                        "point_estimate": 0.13,
+                        "lower_bound": 0.03,
+                        "upper_bound": 0.23,
+                        "confidence_level": 0.95,
+                    }
+                ],
+                "effect_sizes": [{"name": "relative_lift", "value": 0.59, "interpretation": "positive"}],
+                "limitations": ["Observed experiment data can still be sensitive to implementation bias."],
+                "metrics": {"rate_treatment": 0.35, "rate_control": 0.22},
+            },
+        }
+    }
+
+    report = _build_deterministic_report(
+        business_question=question,
+        profile=profile,
+        qa=qa,
+        metrics_out=metrics_out,
+        evidence_payloads=evidence_payloads,
+    )
+    assert "### Statistical Questions Evaluated" in report
+    assert "### Confidence Intervals" in report
+    assert "### Effect Sizes" in report
+    assert "### A/B Test Readout" in report
+    assert "### Statistical Limitations" in report
+
+
+def test_strip_empty_statistical_subsections_removes_placeholder_blocks() -> None:
+    report = (
+        "# Data Analysis Report\n\n"
+        "## 5) Analysis Outputs\n"
+        "### Statistical Questions Evaluated\n"
+        "Not computed in artifacts.\n\n"
+        "### Methods Chosen and Why\n"
+        "Not computed in artifacts.\n\n"
+        "### Results\n"
+        "Not computed in artifacts.\n\n"
+        "## 6) Limitations\n- Example\n"
+    )
+    out = _strip_empty_statistical_subsections(report)
+    assert "### Statistical Questions Evaluated" not in out
+    assert "### Methods Chosen and Why" not in out
+    assert "### Results" not in out

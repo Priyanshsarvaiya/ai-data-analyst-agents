@@ -42,7 +42,21 @@ Postgres auth DB connection (used by Streamlit login/signup):
 
 `python -m ai_data_analyst_agents.pipelines.run_sql_pipeline --db-url "postgresql+psycopg://USER:PASSWORD@HOST:5432/DB_NAME" --table orders --question "Which country has the highest revenue and why?"`
 
-## 6) Code Quality
+## 6) Phase 4 Statistical Examples
+
+A/B conversion example:
+
+`python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/ab_conversion_demo.csv --question "Did treatment improve conversion versus control?"`
+
+Mean comparison example:
+
+`python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/mean_comparison_demo.csv --question "Is average order value different between segment A and segment B?"`
+
+OLS regression example:
+
+`python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/regression_demo.csv --question "Which variables are most associated with revenue? Use regression."`
+
+## 7) Code Quality
 
 Lint check:
 
@@ -52,7 +66,7 @@ Compile check:
 
 `python -m compileall ai_data_analyst_agents app`
 
-## 7) Run Tests
+## 8) Run Tests
 
 Run all tests:
 

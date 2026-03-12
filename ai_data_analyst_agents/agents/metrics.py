@@ -13,6 +13,11 @@ from ai_data_analyst_agents.core.metric_engine import (
 )
 from ai_data_analyst_agents.core.security import validate_read_only_sql
 from ai_data_analyst_agents.core.sql_source import compute_join_profile
+from ai_data_analyst_agents.statistics.ab_testing import run_ab_test
+from ai_data_analyst_agents.statistics.artifacts import write_statistical_artifacts
+from ai_data_analyst_agents.statistics.models import ABTestRequest, HypothesisTestRequest, RegressionRequest
+from ai_data_analyst_agents.statistics.regression import run_ols_regression
+from ai_data_analyst_agents.statistics.selector import run_hypothesis_test
 
 
 # -----------------------------
@@ -40,6 +45,9 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     - recency_by_group: {group_by, date_col}
     - topk: {by, metric, agg?, k?}
     - timeseries_agg: {date_col, metric, freq?, agg?}
+    - statistical_test: {group_col, metric, group_a?, group_b?, compare_to_rest?, paired?, pair_id_col?, success_value?, alpha?, alternative?}
+    - ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?}
+    - ols_regression: {target, predictors, alpha?}
     """
     t: Dict[str, Any] = dict(task or {})
     p: Dict[str, Any] = dict(t.get("params", {}) or {})
@@ -237,6 +245,51 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             p["date_col"] = _first_present(p, ["date_col", "date", "time_col", "timestamp_col"])
         if "freq" not in p:
             p["freq"] = _first_present(p, ["freq", "period", "granularity"]) or "M"
+
+    elif ttype == "statistical_test":
+        if "group_col" not in p:
+            p["group_col"] = _first_present(p, ["group_col", "group_by", "group", "segment_by", "by", "dimension"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "column"])
+        if "group_a" not in p:
+            p["group_a"] = _first_present(p, ["group_a", "label_a", "segment_a", "control", "treatment"])
+        if "group_b" not in p:
+            p["group_b"] = _first_present(p, ["group_b", "label_b", "segment_b"])
+        if "pair_id_col" not in p:
+            p["pair_id_col"] = _first_present(p, ["pair_id_col", "pair_col", "entity_col", "id_col"])
+        if "alpha" not in p:
+            p["alpha"] = _first_present(p, ["alpha", "significance_level"]) or 0.05
+        if "alternative" not in p:
+            p["alternative"] = _first_present(p, ["alternative"]) or "two-sided"
+        p["compare_to_rest"] = bool(p.get("compare_to_rest", False))
+        p["paired"] = bool(p.get("paired", False))
+
+    elif ttype == "ab_test":
+        if "group_col" not in p:
+            p["group_col"] = _first_present(p, ["group_col", "variant_col", "group_by", "group"])
+        if "control" not in p:
+            p["control"] = _first_present(p, ["control", "group_b", "label_b"])
+        if "treatment" not in p:
+            p["treatment"] = _first_present(p, ["treatment", "group_a", "label_a"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "column"])
+        if "metric_type" not in p:
+            p["metric_type"] = _first_present(p, ["metric_type", "outcome_type"]) or "auto"
+        if "alpha" not in p:
+            p["alpha"] = _first_present(p, ["alpha", "significance_level"]) or 0.05
+
+    elif ttype == "ols_regression":
+        if "target" not in p:
+            p["target"] = _first_present(p, ["target", "metric", "dependent_var", "y"])
+        predictors = p.get("predictors")
+        if not isinstance(predictors, list):
+            maybe = _first_present(p, ["predictors", "features", "x"])
+            if isinstance(maybe, list):
+                p["predictors"] = maybe
+            elif isinstance(maybe, str) and maybe.strip():
+                p["predictors"] = [x.strip() for x in maybe.split(",") if x.strip()]
+        if "alpha" not in p:
+            p["alpha"] = _first_present(p, ["alpha", "significance_level"]) or 0.05
 
     t["params"] = p
     return t
@@ -791,6 +844,108 @@ class MetricsAgent(Agent):
                         summary=f"Cohort retention by {p['entity_col']} over {p['date_col']}",
                     )
                     outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "statistical_test":
+                    _require_params(tid, ttype, p, ["group_col", "metric"])
+                    req = HypothesisTestRequest(
+                        group_col=str(p["group_col"]),
+                        metric=str(p["metric"]),
+                        group_a=p.get("group_a"),
+                        group_b=p.get("group_b"),
+                        compare_to_rest=bool(p.get("compare_to_rest", False)),
+                        paired=bool(p.get("paired", False)),
+                        pair_id_col=str(p["pair_id_col"]) if p.get("pair_id_col") else None,
+                        success_value=p.get("success_value", 1),
+                        alpha=float(p.get("alpha", 0.05)),
+                        alternative=str(p.get("alternative", "two-sided")),
+                    )
+                    selection, result = run_hypothesis_test(df, req, analysis_id=tid)
+                    bundle = write_statistical_artifacts(store, task_id=tid, result=result)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=bundle.summary_path,
+                        pointer=None,
+                        summary=f"Statistical test ({result.method}) for {req.metric} by {req.group_col}",
+                    )
+                    outputs["computed"].append(
+                        {
+                            "task_id": tid,
+                            "task_type": ttype,
+                            "artifact": bundle.summary_path,
+                            "artifact_bundle": bundle.to_dict(),
+                            "evidence_id": ev.id,
+                            "method": result.method,
+                            "selection": selection.to_dict(),
+                        }
+                    )
+
+                elif ttype == "ab_test":
+                    _require_params(tid, ttype, p, ["group_col", "control", "treatment", "metric"])
+                    req = ABTestRequest(
+                        group_col=str(p["group_col"]),
+                        control=p["control"],
+                        treatment=p["treatment"],
+                        metric=str(p["metric"]),
+                        metric_type=str(p.get("metric_type", "auto")),
+                        success_value=p.get("success_value", 1),
+                        alpha=float(p.get("alpha", 0.05)),
+                    )
+                    result = run_ab_test(df, req, analysis_id=tid)
+                    bundle = write_statistical_artifacts(store, task_id=tid, result=result)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=bundle.summary_path,
+                        pointer=None,
+                        summary=(
+                            f"A/B test ({result.method}) comparing treatment={req.treatment} "
+                            f"vs control={req.control} on {req.metric}"
+                        ),
+                    )
+                    outputs["computed"].append(
+                        {
+                            "task_id": tid,
+                            "task_type": ttype,
+                            "artifact": bundle.summary_path,
+                            "artifact_bundle": bundle.to_dict(),
+                            "evidence_id": ev.id,
+                            "method": result.method,
+                        }
+                    )
+
+                elif ttype == "ols_regression":
+                    _require_params(tid, ttype, p, ["target", "predictors"])
+                    predictors = p.get("predictors", [])
+                    if not isinstance(predictors, list):
+                        raise ValueError(f"{tid} ({ttype}) predictors must be a list. Got params={p}")
+                    req = RegressionRequest(
+                        target=str(p["target"]),
+                        predictors=[str(x) for x in predictors],
+                        alpha=float(p.get("alpha", 0.05)),
+                    )
+                    result, coeff_table, diagnostics = run_ols_regression(df, req, analysis_id=tid)
+                    bundle = write_statistical_artifacts(
+                        store,
+                        task_id=tid,
+                        result=result,
+                        coefficients=coeff_table,
+                        diagnostics=diagnostics,
+                    )
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=bundle.summary_path,
+                        pointer=None,
+                        summary=f"OLS regression for target={req.target} with predictors={req.predictors}",
+                    )
+                    outputs["computed"].append(
+                        {
+                            "task_id": tid,
+                            "task_type": ttype,
+                            "artifact": bundle.summary_path,
+                            "artifact_bundle": bundle.to_dict(),
+                            "evidence_id": ev.id,
+                            "method": result.method,
+                        }
+                    )
 
                 else:
                     outputs["failed"].append({"task_id": tid, "reason": f"Unknown task type: {ttype}", "task": t})
