@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import mimetypes
 from pathlib import Path
+import sys
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -24,6 +25,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from ai_data_analyst_agents.core.security import sanitize_user_error_message
 try:

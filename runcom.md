@@ -75,3 +75,14 @@ Run all tests:
 Run a single test file:
 
 `pytest -q tests/test_pipeline_csv_e2e.py`
+
+
+Need to do this if folder change:
+`deactivate 2>/dev/null`
+`rm -rf venv`
+`python3 -m venv venv`
+`source venv/bin/activate`
+`which python`
+`which pip`
+`python -m pip install --upgrade pip`
+`python -m pip install -r requirements.txt`

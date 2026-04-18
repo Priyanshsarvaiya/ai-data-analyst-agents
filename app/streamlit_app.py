@@ -5,10 +5,15 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 
 import pandas as pd
 import streamlit as st
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from ai_data_analyst_agents.core.security import sanitize_user_error_message
 from ai_data_analyst_agents.core.settings import load_app_cfg
@@ -21,9 +26,6 @@ try:
 except ModuleNotFoundError:
     from postgres_auth import PostgresAuthStore, load_auth_settings, validate_password_strength
     from run_tracking import RunTrackingStore, execute_tracked_run
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 os.chdir(ROOT)
 
