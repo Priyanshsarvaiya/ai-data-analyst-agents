@@ -6,6 +6,8 @@ import re
 
 from ai_data_analyst_agents.agents.metrics import MetricsAgent
 from ai_data_analyst_agents.agents.planner import (
+    ALLOWED_TASKS_BY_ANALYSIS_TYPE,
+    MANDATORY_TASK_TYPES_BY_ANALYSIS_TYPE,
     AB_KEYWORDS,
     CONVERSION_COL_CANDIDATES,
     CUSTOMER_KEYWORDS,
@@ -23,6 +25,11 @@ from ai_data_analyst_agents.agents.planner import (
     _sanitize_and_number_tasks,
 )
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.contracts import (
+    ARTIFACT_SCHEMA_VERSION,
+    validate_analysis_tasks_contract,
+    validate_metrics_outputs_contract,
+)
 
 
 AB_GROUP_COL_CANDIDATES = ["variant", "experiment_group", "treatment_group", "treatment", "group", "arm", "bucket"]
@@ -30,6 +37,85 @@ AB_GROUP_COL_CANDIDATES = ["variant", "experiment_group", "treatment_group", "tr
 
 def _task_key(task: Dict[str, Any]) -> str:
     return json.dumps({"type": task.get("type"), "params": task.get("params", {})}, sort_keys=True, ensure_ascii=False)
+
+
+def _task_semantic_key(task: Dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "type": str(task.get("type", "")).strip(),
+            "params": dict(sorted(dict(task.get("params", {}) or {}).items(), key=lambda kv: kv[0])),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+def _task_type_map(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for t in tasks:
+        tid = str(t.get("id", "")).strip()
+        ttype = str(t.get("type", "")).strip()
+        if tid and ttype:
+            out[tid] = ttype
+    return out
+
+
+def _collect_gap_types(
+    *,
+    analysis_type: str,
+    existing_tasks: List[Dict[str, Any]],
+    metrics_out: Dict[str, Any],
+    routing_confidence: float | None,
+) -> set[str]:
+    gaps: set[str] = set()
+    required = set(MANDATORY_TASK_TYPES_BY_ANALYSIS_TYPE.get(analysis_type, set()))
+    allowed = set(ALLOWED_TASKS_BY_ANALYSIS_TYPE.get(analysis_type, set()))
+
+    id_to_type = _task_type_map(existing_tasks)
+    computed_types = {id_to_type.get(str(x.get("task_id", "")), "") for x in (metrics_out.get("computed", []) or [])}
+    computed_types = {t for t in computed_types if t}
+    failed_types = {id_to_type.get(str(x.get("task_id", "")), "") for x in (metrics_out.get("failed", []) or [])}
+    failed_types |= {id_to_type.get(str(x.get("task_id", "")), "") for x in (metrics_out.get("skipped", []) or [])}
+    failed_types = {t for t in failed_types if t}
+
+    for t in required:
+        if t not in computed_types:
+            gaps.add(t)
+    gaps |= failed_types
+
+    if routing_confidence is not None and routing_confidence < 0.7:
+        gaps |= {"distribution"}
+        if analysis_type in {"segment_comparison", "diagnostic"}:
+            gaps |= {"groupby_agg", "segment_analysis"}
+
+    return {g for g in gaps if g in allowed}
+
+
+def _filter_candidates_to_gap_closure(
+    candidates: List[Dict[str, Any]],
+    *,
+    allowed_types: set[str],
+    gap_types: set[str],
+    existing_tasks: List[Dict[str, Any]],
+    budget: int,
+) -> List[Dict[str, Any]]:
+    existing_keys = {_task_semantic_key(t) for t in existing_tasks}
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for task in candidates:
+        ttype = str(task.get("type", "")).strip()
+        if ttype not in allowed_types:
+            continue
+        if gap_types and ttype not in gap_types:
+            continue
+        sk = _task_semantic_key(task)
+        if sk in existing_keys or sk in seen:
+            continue
+        seen.add(sk)
+        out.append(task)
+        if len(out) >= max(0, int(budget)):
+            break
+    return out
 
 
 def _has_task(planned: List[Dict[str, Any]], ttype: str, **params: Any) -> bool:
@@ -208,12 +294,31 @@ class NextStepsAgent(Agent):
         logger = ctx["logger"]
         memory = ctx["memory"]
         question = ctx.get("business_question", "")
+        cfg = ctx.get("cfg")
 
         profile = memory.get("result.profiling") or {}
         planner_out = memory.get("result.planner") or {"tasks": []}
         metrics_out = memory.get("result.metrics") or {"computed": [], "failed": [], "skipped": []}
+        intake_out = memory.get("result.intake") or {}
 
         existing_tasks = list(planner_out.get("tasks", []) or [])
+        analysis_type = str(planner_out.get("analysis_type") or intake_out.get("analysis_type") or "descriptive")
+        routing_confidence = intake_out.get("routing_confidence")
+        allowed_types = set(ALLOWED_TASKS_BY_ANALYSIS_TYPE.get(analysis_type, set()))
+        gap_types = _collect_gap_types(
+            analysis_type=analysis_type,
+            existing_tasks=existing_tasks,
+            metrics_out=metrics_out,
+            routing_confidence=float(routing_confidence) if isinstance(routing_confidence, (int, float)) else None,
+        )
+
+        budget = 6
+        if cfg is not None and hasattr(cfg, "planning") and getattr(cfg.planning, "next_steps_task_budget", None) is not None:
+            try:
+                budget = int(cfg.planning.next_steps_task_budget)
+            except Exception:
+                budget = 6
+
         followup_tasks = _build_followup_candidates(
             question=question,
             schema_cols=profile.get("columns", []) or [],
@@ -222,16 +327,42 @@ class NextStepsAgent(Agent):
             column_profiles=profile.get("column_profiles", []) or [],
             existing_tasks=existing_tasks,
         )
+        followup_tasks = _filter_candidates_to_gap_closure(
+            followup_tasks,
+            allowed_types=allowed_types,
+            gap_types=gap_types,
+            existing_tasks=existing_tasks,
+            budget=budget,
+        )
+        for task in followup_tasks:
+            task["provenance"] = {
+                "stages": ["followup"],
+                "route": analysis_type,
+                "semantic_key": _task_semantic_key(task),
+            }
 
         followup_plan = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "analysis_type": analysis_type,
+            "routing_reason": str(planner_out.get("routing_reason", "")).strip() or "next_steps gap-closure",
+            "blocked_requirements": list(planner_out.get("blocked_requirements", []) or []),
+            "feasibility_status": str(planner_out.get("feasibility_status", "partially_feasible")),
+            "planning_contract": planner_out.get("planning_contract", {}),
+            "task_budget": {"max_tasks": int(budget), "planned_tasks": int(len(followup_tasks))},
             "tasks": followup_tasks,
-            "notes": "Automatically expanded tasks from coverage gaps and next-step heuristics.",
+            "notes": f"Gap-closure follow-up tasks. Route={analysis_type}. Gaps={sorted(gap_types)}",
         }
+        followup_plan = validate_analysis_tasks_contract(followup_plan).model_dump()
         store.write_json("next_steps_plan.json", followup_plan)
 
         if not followup_tasks:
             logger.info("[NextSteps] No additional tasks generated.")
-            return {"tasks": [], "execution": {"computed": [], "failed": [], "skipped": []}, "merged_task_count": len(existing_tasks)}
+            return {
+                "tasks": [],
+                "execution": {"computed": [], "failed": [], "skipped": []},
+                "merged_task_count": len(existing_tasks),
+                "gap_types": sorted(gap_types),
+            }
 
         analysis_tasks_path = store.path("analysis_tasks.json")
         initial_tasks_path = store.path("analysis_tasks_initial.json")
@@ -239,9 +370,17 @@ class NextStepsAgent(Agent):
             store.write_text("analysis_tasks_initial.json", analysis_tasks_path.read_text(encoding="utf-8"))
 
         combined_plan = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "analysis_type": analysis_type,
+            "routing_reason": str(planner_out.get("routing_reason", "")).strip() or "next_steps gap-closure",
+            "blocked_requirements": list(planner_out.get("blocked_requirements", []) or []),
+            "feasibility_status": str(planner_out.get("feasibility_status", "partially_feasible")),
+            "planning_contract": planner_out.get("planning_contract", {}),
+            "task_budget": {"max_tasks": int(budget), "planned_tasks": int(len(existing_tasks) + len(followup_tasks))},
             "tasks": [*existing_tasks, *followup_tasks],
-            "notes": str(planner_out.get("notes", "")).strip() + " + next_steps expansion",
+            "notes": str(planner_out.get("notes", "")).strip() + " + next_steps gap-closure expansion",
         }
+        combined_plan = validate_analysis_tasks_contract(combined_plan).model_dump()
         store.write_json("analysis_tasks.json", combined_plan)
         memory.set("result.planner.followup_only", followup_plan)
         memory.set("result.planner", followup_plan)
@@ -250,16 +389,34 @@ class NextStepsAgent(Agent):
         memory.set("result.planner", combined_plan)
 
         merged = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "analysis_type": combined_plan.get("analysis_type"),
+            "planning_contract": combined_plan.get("planning_contract"),
             "computed": [*(metrics_out.get("computed", []) or []), *(execution.get("computed", []) or [])],
             "failed": [*(metrics_out.get("failed", []) or []), *(execution.get("failed", []) or [])],
             "skipped": [*(metrics_out.get("skipped", []) or []), *(execution.get("skipped", []) or [])],
+            "semantic_validation": [
+                *(metrics_out.get("semantic_validation", []) or []),
+                *(execution.get("semantic_validation", []) or []),
+            ],
+            "metric_registry": {
+                **(metrics_out.get("metric_registry", {}) or {}),
+                **(execution.get("metric_registry", {}) or {}),
+            },
             "followup": {
                 "tasks_added": len(followup_tasks),
                 "followup_output_artifact": "next_steps_metrics_outputs.json",
+                "gap_types": sorted(gap_types),
             },
         }
+        merged = validate_metrics_outputs_contract(merged).model_dump()
         store.write_json("metrics_outputs.json", merged)
         memory.set("result.metrics", merged)
 
         logger.info(f"[NextSteps] Added {len(followup_tasks)} follow-up task(s).")
-        return {"tasks": followup_tasks, "execution": execution, "merged_task_count": len(combined_plan["tasks"])}
+        return {
+            "tasks": followup_tasks,
+            "execution": execution,
+            "merged_task_count": len(combined_plan["tasks"]),
+            "gap_types": sorted(gap_types),
+        }

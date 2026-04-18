@@ -15,6 +15,7 @@ from ai_data_analyst_agents.agents.profiling import ProfilingAgent
 from ai_data_analyst_agents.agents.quality import QualityAgent
 from ai_data_analyst_agents.agents.reporting import ReportingAgent
 from ai_data_analyst_agents.agents.reviewer import ReviewerAgent
+from ai_data_analyst_agents.agents.scorecard import ScorecardAgent
 from ai_data_analyst_agents.agents.wrangling import WranglingAgent
 from ai_data_analyst_agents.core.artifacts import ArtifactStore
 from ai_data_analyst_agents.core.evidence import EvidenceStore
@@ -98,6 +99,7 @@ def run_pipeline(
         "eda": EDAAgent(),
         "reporting": ReportingAgent(),
         "reviewer": ReviewerAgent(),
+        "scorecard": ScorecardAgent(),
     }
 
     tasks = default_tasks_phase2()
@@ -122,6 +124,10 @@ def run_pipeline(
                 },
                 "tasks": [{"name": t.name, "reason": t.reason} for t in tasks],
                 "evidence_ids": list(evidence.all().keys()),
+                "quality_status": (
+                    (memory.get("result.scorecard") or {}).get("final_quality_status")
+                    or "fail"
+                ),
             },
         )
         raise
@@ -137,6 +143,10 @@ def run_pipeline(
             },
             "tasks": [{"name": t.name, "reason": t.reason} for t in tasks],
             "evidence_ids": list(evidence.all().keys()),
+            "quality_status": (
+                (memory.get("result.scorecard") or {}).get("final_quality_status")
+                or "fail"
+            ),
         },
     )
     store.write_json(

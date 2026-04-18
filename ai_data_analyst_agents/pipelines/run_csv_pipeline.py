@@ -26,6 +26,7 @@ from ai_data_analyst_agents.agents.metrics import MetricsAgent
 from ai_data_analyst_agents.agents.next_steps import NextStepsAgent
 from ai_data_analyst_agents.agents.reporting import ReportingAgent
 from ai_data_analyst_agents.agents.reviewer import ReviewerAgent
+from ai_data_analyst_agents.agents.scorecard import ScorecardAgent
 
 
 def run_pipeline(
@@ -68,6 +69,7 @@ def run_pipeline(
         "next_steps": NextStepsAgent(),
         "reporting": ReportingAgent(),
         "reviewer": ReviewerAgent(),
+        "scorecard": ScorecardAgent(),
     }
 
     tasks = default_tasks_phase2()
@@ -89,6 +91,10 @@ def run_pipeline(
                 "inputs": {"file_path": file_path, "business_question": business_question},
                 "tasks": [{"name": t.name, "reason": t.reason} for t in tasks],
                 "evidence_ids": list(evidence.all().keys()),
+                "quality_status": (
+                    (memory.get("result.scorecard") or {}).get("final_quality_status")
+                    or "fail"
+                ),
             },
         )
         raise
@@ -100,6 +106,10 @@ def run_pipeline(
             "inputs": {"file_path": file_path, "business_question": business_question},
             "tasks": [{"name": t.name, "reason": t.reason} for t in tasks],
             "evidence_ids": list(evidence.all().keys()),
+            "quality_status": (
+                (memory.get("result.scorecard") or {}).get("final_quality_status")
+                or "fail"
+            ),
         },
     )
     store.write_json(

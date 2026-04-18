@@ -6,6 +6,10 @@ import re
 import pandas as pd
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.contracts import (
+    ARTIFACT_SCHEMA_VERSION,
+    validate_analysis_plan_contract,
+)
 from ai_data_analyst_agents.core.kpi_templates import (
     default_agg_for_metric,
     detect_business_domain,
@@ -321,6 +325,7 @@ class IntakeAgent(Agent):
         }
 
         plan = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
             "business_question": question,
             "source_type": source.get("type", "csv"),
             "suggested_domain": domain,
@@ -337,6 +342,8 @@ class IntakeAgent(Agent):
             "suggested_slices": segment_cols or ["country", "product_category"],
             "requested_metrics": [x for x in [metric, "revenue", "orders", "avg_order_value"] if x],
         }
+
+        plan = validate_analysis_plan_contract(plan).model_dump()
 
         store.write_json("analysis_plan.json", plan)
         logger.info("Wrote analysis_plan.json")

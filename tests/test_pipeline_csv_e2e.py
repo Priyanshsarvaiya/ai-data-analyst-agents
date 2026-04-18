@@ -29,7 +29,9 @@ def test_csv_pipeline_end_to_end_outputs(
         "next_steps_metrics_outputs.json",
         "eda_summary.json",
         "final_report.md",
+        "report_metadata.json",
         "review_log.json",
+        "run_scorecard.json",
         "agent_messages.json",
         "run_manifest.json",
     ]
@@ -46,11 +48,17 @@ def test_csv_pipeline_end_to_end_outputs(
     assert re.search(r"\[\d+\]", report)
 
     review = read_json(run_dir / "review_log.json")
-    assert review["status"] in {"pass", "warn"}
+    assert review["status"] in {"pass", "fail"}
 
     metrics = read_json(run_dir / "metrics_outputs.json")
+    assert metrics.get("schema_version")
     for item in metrics.get("computed", []):
         assert (run_dir / item["artifact"]).exists()
+
+    scorecard = read_json(run_dir / "run_scorecard.json")
+    assert scorecard["final_quality_status"] in {"pass", "fail"}
+    manifest = read_json(run_dir / "run_manifest.json")
+    assert manifest.get("quality_status") in {"pass", "fail"}
 
 
 def test_csv_pipeline_handles_missing_expected_columns(

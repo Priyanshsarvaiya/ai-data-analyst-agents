@@ -101,5 +101,5 @@ def test_metrics_skips_invalid_metric_semantics(tmp_path, agent_ctx_factory) -> 
     assert out["failed"] == []
     assert out["computed"] == []
     assert len(out["skipped"]) == 1
-    assert "Invalid metric semantics" in out["skipped"][0]["reason"]
+    assert "does not allow agg" in out["skipped"][0]["reason"]
     assert any(item["status"] == "invalid" for item in out["semantic_validation"])

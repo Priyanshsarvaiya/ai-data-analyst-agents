@@ -47,6 +47,10 @@ class SecurityCfg(BaseModel):
     user_error_max_chars: int = 400
 
 
+class PlanningCfg(BaseModel):
+    next_steps_task_budget: int = 6
+
+
 class AppCfg(BaseModel):
     runtime: RuntimeCfg = Field(default_factory=RuntimeCfg)
     llm: LlmCfg = Field(default_factory=LlmCfg)
@@ -54,6 +58,7 @@ class AppCfg(BaseModel):
     eda: EDACfg = Field(default_factory=EDACfg)
     sql: SQLCfg = Field(default_factory=SQLCfg)
     security: SecurityCfg = Field(default_factory=SecurityCfg)
+    planning: PlanningCfg = Field(default_factory=PlanningCfg)
 
 
 class EnvSettings(BaseSettings):

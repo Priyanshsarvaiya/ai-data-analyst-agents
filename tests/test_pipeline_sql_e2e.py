@@ -19,7 +19,15 @@ def test_sql_pipeline_end_to_end(sqlite_star_db, patch_llm, patch_pipeline_cfg: 
 
     assert_artifacts_exist(
         run_dir,
-        ["db_schema.json", "analysis_tasks.json", "metrics_outputs.json", "final_report.md"],
+        [
+            "db_schema.json",
+            "analysis_tasks.json",
+            "metrics_outputs.json",
+            "final_report.md",
+            "report_metadata.json",
+            "review_log.json",
+            "run_scorecard.json",
+        ],
     )
 
     plan = read_json(run_dir / "analysis_tasks.json")
@@ -31,6 +39,8 @@ def test_sql_pipeline_end_to_end(sqlite_star_db, patch_llm, patch_pipeline_cfg: 
     assert "India" in report
     assert "## 8) Evidence References" in report
     assert "[1]" in report
+    scorecard = read_json(run_dir / "run_scorecard.json")
+    assert scorecard["final_quality_status"] in {"pass", "fail"}
 
 
 def test_sql_pipeline_invalid_source_raises(patch_llm, patch_pipeline_cfg: Path, tmp_path: Path) -> None:

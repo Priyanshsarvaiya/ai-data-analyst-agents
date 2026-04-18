@@ -4,10 +4,18 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.contracts import (
+    ARTIFACT_SCHEMA_VERSION,
+    validate_metrics_outputs_contract,
+)
 from ai_data_analyst_agents.core.kpi_templates import detect_business_domain, pick_template_dimension
 from ai_data_analyst_agents.core.kpi_templates import (
     default_agg_for_metric,
     is_agg_allowed_for_metric,
+)
+from ai_data_analyst_agents.core.metric_semantics import (
+    build_metric_registry_snapshot,
+    validate_metric_request,
 )
 from ai_data_analyst_agents.core.metric_engine import (
     compute_cohort_retention,
@@ -372,16 +380,125 @@ def _metric_and_agg_for_task(ttype: str, params: Dict[str, Any]) -> tuple[str | 
     return None, None
 
 
-def _validate_metric_semantics(ttype: str, params: Dict[str, Any]) -> tuple[bool, str | None]:
+def _validate_metric_semantics(
+    ttype: str,
+    params: Dict[str, Any],
+    *,
+    planning_contract: Dict[str, Any] | None,
+    available_columns: List[str],
+) -> tuple[bool, str | None]:
     metric, agg = _metric_and_agg_for_task(ttype, params)
     if not metric or not agg:
         return True, None
-    if is_agg_allowed_for_metric(metric, agg):
-        return True, None
-    return (
-        False,
-        f"Invalid metric semantics: agg '{agg}' is not allowed for metric '{metric}'.",
+    aggregation_level = str((planning_contract or {}).get("aggregation_level") or "")
+    ok, reason, _ = validate_metric_request(
+        metric_name=metric,
+        agg=agg,
+        aggregation_level=aggregation_level,
+        available_columns=available_columns,
     )
+    if ok:
+        return True, None
+    return False, reason or f"Invalid metric semantics: agg '{agg}' is not allowed for metric '{metric}'."
+
+
+def _guess_focus_group(question: str, groups: List[str]) -> str | None:
+    q = (question or "").lower()
+    for g in groups:
+        if str(g).strip().lower() in q:
+            return str(g)
+    return None
+
+
+def _autoresolve_statistical_test_params(
+    df: pd.DataFrame,
+    params: Dict[str, Any],
+    *,
+    question: str,
+    min_group_n: int = 5,
+) -> tuple[Dict[str, Any], str | None]:
+    p = dict(params or {})
+    group_col = str(p.get("group_col", ""))
+    metric = str(p.get("metric", ""))
+    if not group_col or not metric:
+        return p, "Missing required statistical parameters (group_col/metric)."
+    if group_col not in df.columns or metric not in df.columns:
+        return p, None
+
+    dff = df.dropna(subset=[group_col, metric]).copy()
+    if dff.empty:
+        return p, f"No non-null rows available for statistical test using {group_col}/{metric}."
+
+    groups = [str(x) for x in dff[group_col].astype(str).unique().tolist() if str(x).strip()]
+    if len(groups) < 2:
+        return p, f"Need at least two groups in {group_col} for statistical test."
+
+    group_a = str(p.get("group_a")).strip() if p.get("group_a") is not None else None
+    group_b = str(p.get("group_b")).strip() if p.get("group_b") is not None else None
+    compare_to_rest = bool(p.get("compare_to_rest", False))
+
+    if group_a is None:
+        group_a = _guess_focus_group(question, groups) or groups[0]
+
+    if len(groups) == 2 and not compare_to_rest:
+        if group_b is None:
+            group_b = groups[1] if groups[0] == group_a else groups[0]
+    elif len(groups) > 2 and group_b is None and not compare_to_rest:
+        compare_to_rest = True
+
+    if group_a and group_a not in groups:
+        return p, f"Requested group_a '{group_a}' not found in {group_col}."
+    if group_b and group_b not in groups:
+        return p, f"Requested group_b '{group_b}' not found in {group_col}."
+
+    if compare_to_rest:
+        n_a = int((dff[group_col].astype(str) == str(group_a)).sum())
+        n_b = int((dff[group_col].astype(str) != str(group_a)).sum())
+        if n_a < min_group_n or n_b < min_group_n:
+            return p, (
+                f"Insufficient sample size for compare_to_rest ({group_a}={n_a}, rest={n_b}); "
+                f"requires at least {min_group_n} each."
+            )
+    else:
+        if group_b is None:
+            return p, "Both comparison groups must be specified when compare_to_rest is false."
+        n_a = int((dff[group_col].astype(str) == str(group_a)).sum())
+        n_b = int((dff[group_col].astype(str) == str(group_b)).sum())
+        if n_a < min_group_n or n_b < min_group_n:
+            return p, (
+                f"Insufficient sample size for statistical test ({group_a}={n_a}, {group_b}={n_b}); "
+                f"requires at least {min_group_n} each."
+            )
+
+    p["group_a"] = group_a
+    p["group_b"] = group_b
+    p["compare_to_rest"] = compare_to_rest
+    return p, None
+
+
+def _validate_ab_groups(
+    df: pd.DataFrame,
+    params: Dict[str, Any],
+    *,
+    min_group_n: int = 5,
+) -> str | None:
+    p = dict(params or {})
+    group_col = str(p.get("group_col", ""))
+    control = str(p.get("control", ""))
+    treatment = str(p.get("treatment", ""))
+    if not group_col or group_col not in df.columns:
+        return None
+    series = df[group_col].astype(str)
+    n_c = int((series == control).sum())
+    n_t = int((series == treatment).sum())
+    if n_c == 0 or n_t == 0:
+        return f"A/B groups not found in {group_col}: control={control} ({n_c}), treatment={treatment} ({n_t})."
+    if n_c < min_group_n or n_t < min_group_n:
+        return (
+            f"Insufficient A/B sample size in {group_col}: control={n_c}, treatment={n_t}; "
+            f"requires at least {min_group_n} each."
+        )
+    return None
 
 
 class MetricsAgent(Agent):
@@ -399,12 +516,25 @@ class MetricsAgent(Agent):
         task_plan = ctx["memory"].get("result.planner", {}) or {}
         tasks = task_plan.get("tasks", []) or []
         planning_contract = task_plan.get("planning_contract", {}) or {}
+        analysis_type = task_plan.get("analysis_type")
 
         outputs: Dict[str, Any] = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "analysis_type": analysis_type,
+            "planning_contract": task_plan.get("planning_contract"),
             "computed": [],
             "failed": [],
             "skipped": [],
             "semantic_validation": [],
+            "metric_registry": build_metric_registry_snapshot(
+                list(
+                    {
+                        str(t.get("params", {}).get("metric"))
+                        for t in tasks
+                        if isinstance(t.get("params"), dict) and t.get("params", {}).get("metric")
+                    }
+                )
+            ),
         }
 
         for t in tasks:
@@ -424,13 +554,18 @@ class MetricsAgent(Agent):
                 f"raw_params={raw_params} | normalized_params={p}"
             )
 
-            valid_semantics, semantic_error = _validate_metric_semantics(ttype, p)
+            valid_semantics, semantic_error = _validate_metric_semantics(
+                ttype,
+                p,
+                planning_contract=planning_contract,
+                available_columns=list(df.columns),
+            )
             if not valid_semantics:
                 outputs["semantic_validation"].append(
                     {
                         "task_id": tid,
                         "status": "invalid",
-                        "analysis_type": planning_contract.get("analysis_type"),
+                        "analysis_type": analysis_type,
                         "reason": semantic_error,
                         "params": p,
                     }
@@ -441,7 +576,7 @@ class MetricsAgent(Agent):
                 {
                     "task_id": tid,
                     "status": "ok",
-                    "analysis_type": planning_contract.get("analysis_type"),
+                    "analysis_type": analysis_type,
                 }
             )
 
@@ -918,6 +1053,14 @@ class MetricsAgent(Agent):
 
                 elif ttype == "statistical_test":
                     _require_params(tid, ttype, p, ["group_col", "metric"])
+                    p, stat_prep_error = _autoresolve_statistical_test_params(
+                        df,
+                        p,
+                        question=str(ctx.get("business_question", "")),
+                    )
+                    if stat_prep_error:
+                        outputs["skipped"].append({"task_id": tid, "reason": stat_prep_error})
+                        continue
                     req = HypothesisTestRequest(
                         group_col=str(p["group_col"]),
                         metric=str(p["metric"]),
@@ -952,6 +1095,10 @@ class MetricsAgent(Agent):
 
                 elif ttype == "ab_test":
                     _require_params(tid, ttype, p, ["group_col", "control", "treatment", "metric"])
+                    ab_err = _validate_ab_groups(df, p)
+                    if ab_err:
+                        outputs["skipped"].append({"task_id": tid, "reason": ab_err})
+                        continue
                     req = ABTestRequest(
                         group_col=str(p["group_col"]),
                         control=p["control"],
@@ -1025,6 +1172,7 @@ class MetricsAgent(Agent):
                 logger.exception(f"Task {tid} failed")
                 outputs["failed"].append({"task_id": tid, "reason": str(e), "task": t})
 
+        outputs = validate_metrics_outputs_contract(outputs).model_dump()
         store.write_json("metrics_outputs.json", outputs)
         logger.info("Wrote metrics_outputs.json")
         return outputs

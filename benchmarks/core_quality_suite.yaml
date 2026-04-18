@@ -1,0 +1,28 @@
+cases:
+  - id: csv_segment_comparison
+    source_type: csv
+    file_path: ../data/sample_ecommerce_data.csv
+    question: Why did India have less revenue than other countries?
+    expected_route: diagnostic
+    tags: [csv, segment, diagnostic]
+
+  - id: csv_trend
+    source_type: csv
+    file_path: ../data/sample_ecommerce_data.csv
+    question: Show monthly revenue trend by country.
+    expected_route: trend
+    tags: [csv, trend]
+
+  - id: csv_impossible_external
+    source_type: csv
+    file_path: ../data/sample_ecommerce_data.csv
+    question: Compare our revenue to competitor benchmarks in 2025.
+    expected_route: impossible
+    tags: [csv, impossible, external]
+
+  - id: csv_experiment_ab
+    source_type: csv
+    file_path: ../data/ab_conversion_demo.csv
+    question: Did treatment improve conversion versus control?
+    expected_route: experiment_ab
+    tags: [csv, stats, ab]

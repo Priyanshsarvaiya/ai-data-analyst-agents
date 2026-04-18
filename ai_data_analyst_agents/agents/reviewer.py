@@ -4,6 +4,7 @@ import re
 from ai_data_analyst_agents.core.agent_base import Agent
 
 EV_PATTERN = re.compile(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]|\[\[EV-([a-f0-9]{10})\]\]")
+RAW_EV_TOKEN_PATTERN = re.compile(r"\[\[EV[^\]]*\]\]")
 NUM_PATTERN = re.compile(r"(?<![\w-])\d[\d,]*(?:\.\d+)?")
 CITE_PATTERN = re.compile(r"\[(\d{1,4})\]")
 CITE_MAP_LINE_PATTERN = re.compile(r"^\|\s*\[(\d{1,4})\]\s*\|\s*(EV-[a-f0-9]{10})\s*\|")
@@ -44,6 +45,10 @@ def _numeric_lines_without_evidence(section_text: str, citation_map: dict[int, s
             bad.append(ln)
     return bad
 
+
+def _violation(rule_id: str, message: str) -> dict[str, str]:
+    return {"rule": rule_id, "severity": "fail", "message": message}
+
 class ReviewerAgent(Agent):
     name = "reviewer"
 
@@ -74,52 +79,84 @@ class ReviewerAgent(Agent):
             ev is not None and str(ev.artifact_path).startswith("statistics/") for ev in referenced_evidence
         ) or "### Statistical Questions Evaluated" in report
 
-        status = "pass"
-        notes = []
+        violations: list[dict[str, str]] = []
 
         if not report.strip():
-            status = "fail"
-            notes.append("final_report.md is empty or missing.")
+            violations.append(_violation("report.non_empty", "final_report.md is empty or missing."))
+
+        unresolved_tokens = []
+        for token in RAW_EV_TOKEN_PATTERN.findall(report):
+            m = re.match(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]", token)
+            if not m:
+                unresolved_tokens.append(token)
+                continue
+            ev_id = m.group(1)
+            if ev_id not in evidence_store.all():
+                unresolved_tokens.append(token)
+        if unresolved_tokens:
+            violations.append(
+                _violation("evidence.placeholders", f"Unresolved evidence placeholders/tags: {unresolved_tokens[:8]}")
+            )
 
         if not ev_tags and not citation_map:
-            status = "warn" if status != "fail" else status
-            notes.append("No evidence references found. Include [[EV:...]] or numeric references like [1].")
+            violations.append(_violation("evidence.references", "No evidence references found in report."))
 
         if unmapped_cites:
-            status = "fail"
-            notes.append(f"Unmapped numeric citations found: {unmapped_cites}")
+            violations.append(_violation("evidence.citation_map", f"Unmapped numeric citations found: {unmapped_cites}"))
 
         if missing:
-            status = "fail"
-            notes.append(f"Report references missing evidence IDs: {missing}")
+            violations.append(_violation("evidence.existence", f"Report references missing evidence IDs: {missing}"))
 
-        # Enforce evidence-linking on key answer sections.
         offenders = []
         for sec in ["1) Executive Summary", "2) Question Answer (Evidence)", "5) Analysis Outputs"]:
             offenders.extend(_numeric_lines_without_evidence(_section(report, sec), citation_map))
         if offenders:
-            status = "fail"
-            notes.append(
-                "Numeric claims without evidence tag found in key sections: "
-                + "; ".join(offenders[:5])
+            violations.append(
+                _violation(
+                    "claims.numeric_supported",
+                    "Numeric claims without evidence support: " + "; ".join(offenders[:5]),
+                )
             )
 
+        limitations_text = _section(report, "6) Limitations")
+        if not limitations_text.strip():
+            violations.append(_violation("limitations.present", "Limitations section is empty."))
+        elif "not computed in artifacts" in limitations_text.lower():
+            metrics_path = store.path("metrics_outputs.json")
+            if metrics_path.exists():
+                try:
+                    import json as _json
+
+                    metrics_out = _json.loads(metrics_path.read_text(encoding="utf-8"))
+                    if not (metrics_out.get("failed") or metrics_out.get("skipped")):
+                        violations.append(
+                            _violation(
+                                "limitations.relevance",
+                                "Limitations mention missing computations, but no failed/skipped tasks were recorded.",
+                            )
+                        )
+                except Exception:
+                    pass
+
         if has_statistical_evidence:
-            if not _section(report, "6) Limitations").strip():
-                status = "fail"
-                notes.append("Statistical reporting requires an explicit limitations section.")
             if "### Statistical Limitations" not in report:
-                status = "warn" if status != "fail" else status
-                notes.append("Statistical outputs are present but the report is missing a dedicated statistical limitations subsection.")
+                violations.append(
+                    _violation(
+                        "stats.limitations_subsection",
+                        "Statistical evidence exists but report lacks '### Statistical Limitations' subsection.",
+                    )
+                )
 
             if SIGNIFICANCE_PATTERN.search(report):
                 has_pvalue = bool(re.search(r"\bp-value\b|\bp\s*=\s*\d", report, re.IGNORECASE))
                 has_ci = "### Confidence Intervals" in report
                 has_effect = "### Effect Sizes" in report
                 if not (has_pvalue and has_ci and has_effect):
-                    status = "fail"
-                    notes.append(
-                        "Claims of statistical significance require p-value, confidence interval, and effect size support in the report."
+                    violations.append(
+                        _violation(
+                            "stats.significance_support",
+                            "Significance claims require p-value, confidence intervals, and effect sizes.",
+                        )
                     )
 
             stat_claim_lines = []
@@ -134,14 +171,21 @@ class ReviewerAgent(Agent):
                     stat_claim_lines.append(line)
             stat_claim_text = "\n".join(stat_claim_lines)
             if CAUSAL_PATTERN.search(stat_claim_text):
-                status = "fail"
-                notes.append("Causal wording is blocked for statistical summaries unless explicitly justified by the study design.")
+                violations.append(
+                    _violation(
+                        "stats.causal_language",
+                        "Causal wording is blocked for statistical summaries unless explicitly justified.",
+                    )
+                )
 
+        status = "fail" if violations else "pass"
+        notes = [v["message"] for v in violations]
         out = {
             "status": status,
             "evidence_tags_found": len(ev_tags),
             "missing_refs": missing,
             "notes": notes,
+            "violations": violations,
         }
 
         store.write_json("review_log.json", out)

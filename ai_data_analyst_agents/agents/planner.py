@@ -5,6 +5,10 @@ import json
 import re
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.contracts import (
+    ARTIFACT_SCHEMA_VERSION,
+    validate_analysis_tasks_contract,
+)
 from ai_data_analyst_agents.core.kpi_templates import (
     default_agg_for_metric,
     detect_business_domain,
@@ -226,6 +230,26 @@ ALLOWED_TASKS_BY_ANALYSIS_TYPE: Dict[str, set[str]] = {
         "distribution",
         "groupby_agg",
     },
+}
+
+MANDATORY_TASK_TYPES_BY_ANALYSIS_TYPE: Dict[str, set[str]] = {
+    "descriptive": {"kpi_template_apply", "distribution"},
+    "trend": {"kpi_template_apply", "timeseries_agg"},
+    "segment_comparison": {"kpi_template_apply", "groupby_agg", "segment_analysis"},
+    "diagnostic": {"kpi_template_apply", "groupby_agg", "segment_analysis"},
+    "experiment_ab": {"kpi_template_apply", "ab_test"},
+    "forecasting_unsupported": {"kpi_template_apply", "timeseries_agg"},
+    "impossible": {"kpi_template_apply"},
+}
+
+TASK_BUDGET_BY_ANALYSIS_TYPE: Dict[str, int] = {
+    "descriptive": 12,
+    "trend": 14,
+    "segment_comparison": 16,
+    "diagnostic": 18,
+    "experiment_ab": 14,
+    "forecasting_unsupported": 10,
+    "impossible": 6,
 }
 
 
@@ -855,6 +879,8 @@ def _sanitize_and_number_tasks(
 
         clean.append({"type": ttype, "params": p})
 
+    clean = _dedupe_tasks_by_semantic_key(clean)
+
     out: List[Dict[str, Any]] = []
     for i, task in enumerate(clean, start=1):
         out.append({"id": f"T{i}", "type": task["type"], "params": task["params"]})
@@ -1247,6 +1273,102 @@ def _merge_task_lists(first: List[Dict[str, Any]], second: List[Dict[str, Any]])
     return merged
 
 
+def _task_semantic_key(task: Dict[str, Any]) -> str:
+    ttype = str(task.get("type", "")).strip()
+    params = dict(task.get("params", {}) or {})
+    core = {"type": ttype, "params": dict(sorted(params.items(), key=lambda kv: kv[0]))}
+    return json.dumps(core, sort_keys=True, ensure_ascii=False)
+
+
+def _dedupe_tasks_by_semantic_key(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for task in tasks:
+        sk = _task_semantic_key(task)
+        if sk in seen:
+            continue
+        seen.add(sk)
+        out.append(task)
+    return out
+
+
+def _enforce_mandatory_task_types(
+    tasks: List[Dict[str, Any]],
+    *,
+    analysis_type: str,
+    seeded_tasks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    mandatory = MANDATORY_TASK_TYPES_BY_ANALYSIS_TYPE.get(analysis_type, set())
+    if not mandatory:
+        return tasks
+    have = {str(t.get("type", "")).strip() for t in tasks}
+    if mandatory.issubset(have):
+        return tasks
+    out = list(tasks)
+    for seeded in seeded_tasks:
+        ttype = str(seeded.get("type", "")).strip()
+        if ttype in mandatory and ttype not in have:
+            out.append(seeded)
+            have.add(ttype)
+    return _dedupe_tasks_by_semantic_key(out)
+
+
+def _apply_task_budget(tasks: List[Dict[str, Any]], *, analysis_type: str, seed_keys: set[str], max_tasks: int) -> List[Dict[str, Any]]:
+    if max_tasks <= 0:
+        return _dedupe_tasks_by_semantic_key(tasks)
+
+    deduped = _dedupe_tasks_by_semantic_key(tasks)
+    if len(deduped) <= max_tasks:
+        return deduped
+
+    prioritized: List[Dict[str, Any]] = []
+    overflow: List[Dict[str, Any]] = []
+    for task in deduped:
+        if _task_semantic_key(task) in seed_keys:
+            prioritized.append(task)
+        else:
+            overflow.append(task)
+
+    out = list(prioritized[:max_tasks])
+    if len(out) < max_tasks:
+        out.extend(overflow[: max_tasks - len(out)])
+    return out
+
+
+def _annotate_task_provenance(
+    tasks: List[Dict[str, Any]],
+    *,
+    analysis_type: str,
+    seeded_tasks: List[Dict[str, Any]],
+    heuristic_tasks: List[Dict[str, Any]],
+    sql_heuristic_tasks: List[Dict[str, Any]],
+    llm_tasks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    stage_keys = {
+        "seed": {_task_semantic_key(t) for t in seeded_tasks},
+        "heuristic": {_task_semantic_key(t) for t in heuristic_tasks},
+        "sql_heuristic": {_task_semantic_key(t) for t in sql_heuristic_tasks},
+        "llm": {_task_semantic_key(t) for t in llm_tasks},
+    }
+    out: List[Dict[str, Any]] = []
+    for task in tasks:
+        sk = _task_semantic_key(task)
+        stages: List[str] = []
+        for stage, keys in stage_keys.items():
+            if sk in keys:
+                stages.append(stage)
+        if not stages:
+            stages = ["heuristic"]
+        obj = dict(task)
+        obj["provenance"] = {
+            "stages": stages,
+            "route": analysis_type,
+            "semantic_key": sk,
+        }
+        out.append(obj)
+    return out
+
+
 class PlannerAgent(Agent):
     name = "planner"
 
@@ -1379,11 +1501,31 @@ class PlannerAgent(Agent):
         merged_tasks = _merge_task_lists(_merge_task_lists(heuristic_tasks, sql_heuristic_tasks), llm_tasks)
         route_filtered = _filter_tasks_by_analysis_type(merged_tasks, analysis_type)
         routed_tasks = _merge_task_lists(seeded_tasks, route_filtered)
+        routed_tasks = _enforce_mandatory_task_types(
+            routed_tasks,
+            analysis_type=analysis_type,
+            seeded_tasks=seeded_tasks,
+        )
+        budget_limit = TASK_BUDGET_BY_ANALYSIS_TYPE.get(analysis_type, 12)
+        routed_tasks = _apply_task_budget(
+            routed_tasks,
+            analysis_type=analysis_type,
+            seed_keys={_task_semantic_key(t) for t in seeded_tasks},
+            max_tasks=budget_limit,
+        )
         final_tasks = _sanitize_and_number_tasks(
             routed_tasks,
             schema_cols,
             numeric_cols,
             planning_contract=planning_contract,
+        )
+        final_tasks = _annotate_task_provenance(
+            final_tasks,
+            analysis_type=analysis_type,
+            seeded_tasks=seeded_tasks,
+            heuristic_tasks=heuristic_tasks,
+            sql_heuristic_tasks=sql_heuristic_tasks,
+            llm_tasks=llm_tasks,
         )
 
         if not final_tasks:
@@ -1394,6 +1536,13 @@ class PlannerAgent(Agent):
                         "id": "T1",
                         "type": "distribution",
                         "params": {"column": fallback_col, "quantiles": [0.05, 0.25, 0.5, 0.75, 0.95]},
+                        "provenance": {
+                            "stages": ["seed"],
+                            "route": analysis_type,
+                            "semantic_key": _task_semantic_key(
+                                {"type": "distribution", "params": {"column": fallback_col, "quantiles": [0.05, 0.25, 0.5, 0.75, 0.95]}}
+                            ),
+                        },
                     }
                 ]
             else:
@@ -1403,21 +1552,34 @@ class PlannerAgent(Agent):
                         "id": "T1",
                         "type": "groupby_agg",
                         "params": {"group_by": fallback_group, "metric": fallback_group, "agg": "count", "limit": 50},
+                        "provenance": {
+                            "stages": ["seed"],
+                            "route": analysis_type,
+                            "semantic_key": _task_semantic_key(
+                                {
+                                    "type": "groupby_agg",
+                                    "params": {"group_by": fallback_group, "metric": fallback_group, "agg": "count", "limit": 50},
+                                }
+                            ),
+                        },
                     }
                 ]
 
         plan = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
             "analysis_type": analysis_type,
             "routing_reason": routing_reason,
             "blocked_requirements": blocked_requirements,
             "feasibility_status": planning_contract.get("feasibility_status"),
             "planning_contract": planning_contract,
+            "task_budget": {"max_tasks": int(budget_limit), "planned_tasks": int(len(final_tasks))},
             "tasks": final_tasks,
             "notes": (
                 f"Deterministic-first plan with optional LLM enrichment. "
                 f"Domain={business_domain}, route={analysis_type}."
             ),
         }
+        plan = validate_analysis_tasks_contract(plan).model_dump()
         store.write_json("analysis_tasks.json", plan)
         logger.info("[Planner] Wrote analysis_tasks.json")
         return plan

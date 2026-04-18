@@ -4,6 +4,10 @@ import json
 import re
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.contracts import (
+    ARTIFACT_SCHEMA_VERSION,
+    validate_report_metadata_contract,
+)
 from ai_data_analyst_agents.core.evidence import EvidenceRef
 from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
 from ai_data_analyst_agents.core.security import redact_payload_for_llm
@@ -86,6 +90,9 @@ Produce exactly these sections in this order:
 """
 
 EV_TAG_PATTERN = re.compile(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]|\[\[EV-([a-f0-9]{10})\]\]")
+RAW_EV_TOKEN_PATTERN = re.compile(r"\[\[EV[^\]]*\]\]")
+NUMERIC_PATTERN = re.compile(r"(?<![\w-])\d[\d,]*(?:\.\d+)?")
+CITATION_PATTERN = re.compile(r"\[(\d{1,4})\]")
 
 
 def _safe_read_json(path) -> Any:
@@ -179,6 +186,72 @@ def _report_section(report: str, heading: str) -> str:
     pattern = rf"## {re.escape(heading)}(.*?)(?:\n## |\Z)"
     m = re.search(pattern, report, re.DOTALL)
     return m.group(1) if m else ""
+
+
+def _collect_report_consistency_issues(report: str, evidence_ids: set[str]) -> list[str]:
+    issues: list[str] = []
+    txt = (report or "").strip()
+    if not txt:
+        return ["Empty report."]
+
+    unresolved = []
+    for token in RAW_EV_TOKEN_PATTERN.findall(txt):
+        m = re.match(r"\[\[(?:EV:)?(EV-[a-f0-9]{10})\]\]", token)
+        if not m:
+            unresolved.append(token)
+            continue
+        ev_id = m.group(1)
+        if ev_id not in evidence_ids:
+            unresolved.append(token)
+    if unresolved:
+        issues.append(f"Unresolved evidence placeholders/tags found: {unresolved[:6]}")
+
+    required_sections = [
+        "1) Executive Summary",
+        "2) Question Answer (Evidence)",
+        "3) Dataset Overview",
+        "4) Data Quality Findings",
+        "5) Analysis Outputs",
+        "6) Limitations",
+        "7) Next Steps",
+    ]
+    for sec in required_sections:
+        if not _report_section(txt, sec).strip():
+            issues.append(f"Missing or empty required section: {sec}")
+
+    citation_map = {}
+    sec8 = _report_section(txt, "8) Evidence References")
+    if sec8:
+        for ln in sec8.splitlines():
+            m = re.search(r"\|\s*\[(\d{1,4})\]\s*\|\s*(EV-[a-f0-9]{10})\s*\|", ln.strip())
+            if m:
+                citation_map[int(m.group(1))] = m.group(2)
+
+    for sec in ["1) Executive Summary", "2) Question Answer (Evidence)", "5) Analysis Outputs"]:
+        body = _report_section(txt, sec)
+        for line in [ln.strip() for ln in body.splitlines() if ln.strip() and not ln.strip().startswith("|")]:
+            if NUMERIC_PATTERN.search(line):
+                has_ev = bool(EV_TAG_PATTERN.search(line))
+                cite_nums = [int(x) for x in CITATION_PATTERN.findall(line)]
+                has_num_cite = any(n in citation_map for n in cite_nums)
+                if not has_ev and not has_num_cite:
+                    issues.append(f"Unsupported numeric claim in {sec}: {line[:160]}")
+
+    high_entities = set()
+    low_entities = set()
+    for line in txt.splitlines():
+        line_l = line.lower()
+        m_h = re.search(r"([a-z0-9_ \-/]+?)\s+is\s+(?:the\s+)?highest", line_l)
+        m_l = re.search(r"([a-z0-9_ \-/]+?)\s+is\s+(?:the\s+)?lowest", line_l)
+        if m_h:
+            high_entities.add(m_h.group(1).strip())
+        if m_l:
+            low_entities.add(m_l.group(1).strip())
+    clashes = sorted(x for x in high_entities if x in low_entities and x)
+    if clashes:
+        issues.append(f"Potential contradiction: same entity marked highest and lowest: {clashes}")
+
+    return issues
 
 
 def _report_needs_fallback(report: str, metrics_out: Dict[str, Any], evidence_payloads: Dict[str, Any]) -> bool:
@@ -883,6 +956,7 @@ class ReportingAgent(Agent):
 
         logger.info("[OpenRouter] Calling LLM for report generation...")
         report_md = ""
+        used_fallback = False
         try:
             client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
             report_md = client.chat(
@@ -901,6 +975,7 @@ class ReportingAgent(Agent):
             report_md = _strip_empty_statistical_subsections(report_md)
         if _report_needs_fallback(report_md, metrics_out or {}, evidence_payloads):
             logger.warning("[Reporting] LLM report incomplete for available metrics. Using deterministic fallback.")
+            used_fallback = True
             report_md = _build_deterministic_report(
                 business_question=business_question,
                 profile=profile or {},
@@ -915,7 +990,62 @@ class ReportingAgent(Agent):
         ):
             report_md = _strip_empty_statistical_subsections(report_md)
         report_md = _format_evidence_citations(report_md, evidence_store.all())
+
+        consistency_issues = _collect_report_consistency_issues(report_md, set(evidence_store.all().keys()))
+        if consistency_issues:
+            logger.warning("[Reporting] Consistency issues found. Falling back to deterministic report.")
+            used_fallback = True
+            report_md = _build_deterministic_report(
+                business_question=business_question,
+                profile=profile or {},
+                qa=qa or {},
+                metrics_out=metrics_out or {},
+                evidence_payloads=evidence_payloads,
+            )
+            report_md = _normalize_evidence_tags(report_md)
+            if not any(
+                isinstance(ev.get("payload"), dict) and ev.get("payload", {}).get("analysis_type") in {"hypothesis_test", "ab_test", "regression"}
+                for ev in evidence_payloads.values()
+            ):
+                report_md = _strip_empty_statistical_subsections(report_md)
+            report_md = _format_evidence_citations(report_md, evidence_store.all())
+            consistency_issues = _collect_report_consistency_issues(report_md, set(evidence_store.all().keys()))
+
+        unresolved_count = len([x for x in RAW_EV_TOKEN_PATTERN.findall(report_md) if not re.match(r"\[\[(?:EV:)?EV-[a-f0-9]{10}\]\]", x)])
+        unsupported_numeric_claim_lines = len(
+            [x for x in consistency_issues if x.startswith("Unsupported numeric claim")]
+        )
+        contradiction_count = len([x for x in consistency_issues if x.startswith("Potential contradiction")])
+        required_sections = [
+            "1) Executive Summary",
+            "2) Question Answer (Evidence)",
+            "3) Dataset Overview",
+            "4) Data Quality Findings",
+            "5) Analysis Outputs",
+            "6) Limitations",
+            "7) Next Steps",
+        ]
+        section_ok = all(_report_section(report_md, sec).strip() for sec in required_sections)
+        report_metadata = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "analysis_type": (
+                (planner_out or {}).get("analysis_type")
+                or (plan or {}).get("analysis_type")
+            ),
+            "report_path": "final_report.md",
+            "used_fallback": bool(used_fallback),
+            "unresolved_ev_placeholders": int(unresolved_count),
+            "unsupported_numeric_claim_lines": int(unsupported_numeric_claim_lines),
+            "section_completeness_ok": bool(section_ok),
+            "contradiction_count": int(contradiction_count),
+            "consistency_issues": [str(x) for x in consistency_issues],
+        }
+        report_metadata = validate_report_metadata_contract(report_metadata).model_dump()
         logger.info("[OpenRouter] Report generated.")
 
         store.write_text("final_report.md", report_md)
+        store.write_json("report_metadata.json", report_metadata)
+        memory = ctx.get("memory")
+        if memory is not None:
+            memory.set("result.reporting_metadata", report_metadata)
         return report_md
