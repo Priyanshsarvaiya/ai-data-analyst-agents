@@ -16,10 +16,34 @@ def test_intake_agent_outputs_structured_plan(tmp_path, sample_df: pd.DataFrame,
     assert out["business_question"] == "Why is revenue lower in India?"
     assert out["source_type"] == "csv"
     assert out["suggested_domain"] == "ecommerce"
+    assert out["analysis_type"] == "diagnostic"
+    assert out["feasibility_status"] in {"feasible", "partially_feasible"}
+    assert isinstance(out["blocked_requirements"], list)
     assert set(["assumptions", "suggested_slices", "requested_metrics"]).issubset(out.keys())
+    assert set(
+        [
+            "target_metric",
+            "aggregation_level",
+            "time_column",
+            "segment_columns",
+            "comparison_logic",
+            "success_criterion",
+            "analysis_limitations",
+            "feasibility_status",
+            "analysis_type",
+        ]
+    ).issubset(out["framing"].keys())
     assert ctx["store"].path("analysis_plan.json").exists()
     saved = read_json(ctx["store"].path("analysis_plan.json"))
     assert saved["business_question"] == out["business_question"]
+
+
+def test_intake_routes_forecast_questions_as_unsupported(tmp_path, sample_df: pd.DataFrame, agent_ctx_factory) -> None:
+    ctx = agent_ctx_factory(tmp_path, df=sample_df, question="Forecast next month revenue by country", include_cfg=False)
+    out = IntakeAgent().run(ctx)
+    assert out["analysis_type"] == "forecasting_unsupported"
+    assert out["framing"]["analysis_type"] == "forecasting_unsupported"
+    assert "Forecasting is not executed" in " ".join(out["framing"]["analysis_limitations"])
 
 
 def test_profiling_agent_includes_sql_schema_summary_and_evidence(tmp_path, sample_df: pd.DataFrame, agent_ctx_factory) -> None:

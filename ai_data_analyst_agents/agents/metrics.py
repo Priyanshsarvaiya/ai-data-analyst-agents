@@ -5,6 +5,10 @@ import pandas as pd
 
 from ai_data_analyst_agents.core.agent_base import Agent
 from ai_data_analyst_agents.core.kpi_templates import detect_business_domain, pick_template_dimension
+from ai_data_analyst_agents.core.kpi_templates import (
+    default_agg_for_metric,
+    is_agg_allowed_for_metric,
+)
 from ai_data_analyst_agents.core.metric_engine import (
     compute_cohort_retention,
     compute_metric_definition,
@@ -60,7 +64,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "sum_col", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "limit" not in p:
             p["limit"] = _first_present(p, ["limit", "top_k", "topk", "k"]) or 50
 
@@ -82,7 +87,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "limit" not in p:
             p["limit"] = _first_present(p, ["limit", "top_k", "topk", "k"]) or 100
 
@@ -109,7 +115,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "quantiles" not in p or not isinstance(p.get("quantiles"), list):
             p["quantiles"] = [0.5, 0.75, 0.9, 0.95, 0.99]
 
@@ -125,7 +132,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "k" not in p:
             p["k"] = _first_present(p, ["k", "top_k", "topk", "limit"]) or 10
         try:
@@ -141,7 +149,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "freq" not in p:
             p["freq"] = _first_present(p, ["freq", "granularity", "period"]) or "M"
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
 
     elif ttype == "filter_agg":
         # ✅ Handle nested where dict produced by some planners:
@@ -186,7 +195,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 ["metric", "measure", "target", "metric_col", "value_col", "y", "value_metric"]
             )
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
 
     elif ttype == "sql_query":
         if "query" not in p:
@@ -222,7 +232,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "group_by" not in p:
             p["group_by"] = _first_present(p, ["group_by", "segment_by", "dimension", "by"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric_col") or "metric"), preferred=str(proposed) if proposed else None)
 
     elif ttype == "segment_analysis":
         if "segment_by" not in p:
@@ -230,7 +241,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "metric_col", "value", "measure"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "limit" not in p:
             p["limit"] = _first_present(p, ["limit", "top_k", "k"]) or 100
         try:
@@ -336,6 +348,42 @@ def _safe_agg(series: pd.Series, agg: str) -> float:
     return float(series.sum())
 
 
+def _metric_and_agg_for_task(ttype: str, params: Dict[str, Any]) -> tuple[str | None, str | None]:
+    p = params or {}
+    if ttype in {
+        "groupby_agg",
+        "groupby2_agg",
+        "filter_agg",
+        "group_distribution",
+        "topk",
+        "timeseries_agg",
+        "segment_analysis",
+    }:
+        metric = p.get("metric")
+        agg = p.get("agg", "sum")
+        return (str(metric), str(agg)) if metric is not None else (None, str(agg))
+
+    if ttype == "metric_definition":
+        metric_col = p.get("metric_col")
+        if metric_col is not None:
+            return str(metric_col), str(p.get("agg", "sum"))
+        return None, None
+
+    return None, None
+
+
+def _validate_metric_semantics(ttype: str, params: Dict[str, Any]) -> tuple[bool, str | None]:
+    metric, agg = _metric_and_agg_for_task(ttype, params)
+    if not metric or not agg:
+        return True, None
+    if is_agg_allowed_for_metric(metric, agg):
+        return True, None
+    return (
+        False,
+        f"Invalid metric semantics: agg '{agg}' is not allowed for metric '{metric}'.",
+    )
+
+
 class MetricsAgent(Agent):
     name = "metrics"
 
@@ -350,11 +398,13 @@ class MetricsAgent(Agent):
         df: pd.DataFrame = ctx["memory"].get("df.cleaned", ctx["df"])
         task_plan = ctx["memory"].get("result.planner", {}) or {}
         tasks = task_plan.get("tasks", []) or []
+        planning_contract = task_plan.get("planning_contract", {}) or {}
 
         outputs: Dict[str, Any] = {
             "computed": [],
             "failed": [],
             "skipped": [],
+            "semantic_validation": [],
         }
 
         for t in tasks:
@@ -372,6 +422,27 @@ class MetricsAgent(Agent):
             logger.info(
                 f"[Metrics] {tid} type={ttype_raw} -> {ttype} | "
                 f"raw_params={raw_params} | normalized_params={p}"
+            )
+
+            valid_semantics, semantic_error = _validate_metric_semantics(ttype, p)
+            if not valid_semantics:
+                outputs["semantic_validation"].append(
+                    {
+                        "task_id": tid,
+                        "status": "invalid",
+                        "analysis_type": planning_contract.get("analysis_type"),
+                        "reason": semantic_error,
+                        "params": p,
+                    }
+                )
+                outputs["skipped"].append({"task_id": tid, "reason": semantic_error})
+                continue
+            outputs["semantic_validation"].append(
+                {
+                    "task_id": tid,
+                    "status": "ok",
+                    "analysis_type": planning_contract.get("analysis_type"),
+                }
             )
 
             try:

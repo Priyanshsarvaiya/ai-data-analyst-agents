@@ -66,6 +66,67 @@ KPI_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
 
 DEFAULT_DOMAIN = "ecommerce"
 
+_SEMANTIC_AGGS: Dict[str, List[str]] = {
+    "additive": ["sum", "mean", "min", "max", "median"],
+    "count": ["count"],
+    "ratio": ["mean", "median", "min", "max"],
+    "rate": ["mean", "median", "min", "max"],
+    "duration": ["mean", "median", "min", "max", "sum"],
+    "unknown": ["sum", "mean", "count", "min", "max", "median"],
+}
+
+_RATE_TOKENS = {
+    "rate",
+    "ratio",
+    "pct",
+    "percent",
+    "share",
+    "ctr",
+    "cvr",
+    "aov",
+    "arpu",
+    "cpa",
+    "roas",
+    "avg_",
+}
+_COUNT_TOKENS = {
+    "count",
+    "orders",
+    "transactions",
+    "impressions",
+    "clicks",
+    "sessions",
+    "visits",
+    "users",
+    "customers",
+    "n_",
+}
+_DURATION_TOKENS = {
+    "latency",
+    "duration",
+    "time",
+    "cycle",
+    "days",
+    "hours",
+    "minutes",
+}
+_ADDITIVE_TOKENS = {
+    "revenue",
+    "sales",
+    "amount",
+    "gmv",
+    "spend",
+    "cost",
+    "profit",
+    "price",
+    "quantity",
+    "units",
+    "mrr",
+    "arr",
+    "value",
+    "total",
+}
+
 
 def detect_business_domain(question: str, schema_cols: List[str]) -> str:
     q = (question or "").lower()
@@ -111,3 +172,54 @@ def pick_cohort_columns(domain: str, schema_cols: List[str]) -> Tuple[str | None
             break
     return entity_col, date_col
 
+
+def infer_metric_kind(metric_name: str) -> str:
+    name = (metric_name or "").strip().lower()
+    if not name:
+        return "unknown"
+
+    if "_id" in name or name.endswith("id"):
+        return "count"
+
+    if any(tok in name for tok in _RATE_TOKENS):
+        if "rate" in name or "pct" in name or "percent" in name or "share" in name:
+            return "rate"
+        return "ratio"
+
+    if any(tok in name for tok in _COUNT_TOKENS):
+        return "count"
+
+    if any(tok in name for tok in _DURATION_TOKENS):
+        return "duration"
+
+    if any(tok in name for tok in _ADDITIVE_TOKENS):
+        return "additive"
+
+    return "unknown"
+
+
+def allowed_aggs_for_metric(metric_name: str, metric_kind: str | None = None) -> List[str]:
+    kind = (metric_kind or infer_metric_kind(metric_name)).strip().lower()
+    return list(_SEMANTIC_AGGS.get(kind, _SEMANTIC_AGGS["unknown"]))
+
+
+def default_agg_for_metric(metric_name: str, preferred: str | None = None) -> str:
+    allowed = allowed_aggs_for_metric(metric_name)
+    if preferred:
+        pref = str(preferred).strip().lower()
+        if pref in allowed:
+            return pref
+    if "sum" in allowed:
+        return "sum"
+    if "mean" in allowed:
+        return "mean"
+    if "count" in allowed:
+        return "count"
+    return allowed[0] if allowed else "sum"
+
+
+def is_agg_allowed_for_metric(metric_name: str, agg: str, metric_kind: str | None = None) -> bool:
+    a = str(agg or "").strip().lower()
+    if not a:
+        return False
+    return a in set(allowed_aggs_for_metric(metric_name, metric_kind=metric_kind))

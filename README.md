@@ -299,41 +299,72 @@ The system consists of the following specialized agents:
 ```
 ai-data-analyst-agents/
   README.md
-  app/                    # Streamlit / web UI
-  agents/
-    intake.py
-    profiling.py
-    quality.py
-    wrangling.py
-    eda.py
-    stats.py
-    reporting.py
-    reviewer.py
-  tools/
-    pandas_tools.py
-    plotting_tools.py
-    sql_tools.py
-    validation_tools.py
-  ai_data_analyst_agents/statistics/
-    models.py
-    assumptions.py
-    hypothesis_tests.py
-    confidence_intervals.py
-    effect_sizes.py
-    ab_testing.py
-    regression.py
-    selector.py
-    limitations.py
-    artifacts.py
-  pipelines/
-    run_csv_pipeline.py
-    run_sql_pipeline.py
-  artifacts/
-    (generated outputs)
-  tests/
-    test_quality_checks.py
+  pyproject.toml
+  requirements.txt
+  runcom.md
+  skills.md
+  app/                                  # Streamlit UI + auth + run tracking
+    postgres_auth.py
+    run_tracking.py
+    streamlit_app.py
+  ai_data_analyst_agents/
+    __init__.py
+    agents/                             # Specialized analytics agents
+      eda.py
+      intake.py
+      metrics.py
+      next_steps.py
+      planner.py
+      profiling.py
+      quality.py
+      reporting.py
+      reviewer.py
+      wrangling.py
+    core/                               # Shared runtime, config, orchestration, SQL, security
+      agent_base.py
+      artifacts.py
+      evidence.py
+      kpi_templates.py
+      logging.py
+      memory.py
+      messages.py
+      metric_engine.py
+      openrouter_client.py
+      orchestrator.py
+      security.py
+      settings.py
+      sql_source.py
+      task_planner.py
+    pipelines/                          # CLI entrypoints for CSV and SQL analysis
+      run_csv_pipeline.py
+      run_sql_pipeline.py
+    statistics/                         # Statistical models, tests, and output helpers
+      ab_testing.py
+      artifacts.py
+      assumptions.py
+      confidence_intervals.py
+      effect_sizes.py
+      hypothesis_tests.py
+      limitations.py
+      models.py
+      regression.py
+      selector.py
+    tools/                              # Pandas, plotting, and validation helpers
+      pandas_tools.py
+      plotting_tools.py
+      validation_tools.py
   configs/
-    rules.yaml            # guardrails, KPI templates
+    rules.yaml
+    settings.yaml
+  data/                                 # Sample CSV / SQLite inputs and local auth DB
+    *.csv
+    *.db
+  artifacts/                            # Generated run outputs (reports, charts, manifests, logs)
+    run_YYYYMMDD_HHMMSS/
+  tests/                                # Unit and integration coverage across app and pipeline
+    conftest.py
+    helpers.py
+    test_*.py
 ```
 
 ------------------------------------------------------------------------

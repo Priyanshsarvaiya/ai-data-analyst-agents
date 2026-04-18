@@ -74,3 +74,32 @@ def test_metrics_groupby_limit_zero_includes_all_groups(tmp_path, sample_df: pd.
     assert out["failed"] == []
     payload = read_json(ctx["store"].path(out["computed"][0]["artifact"]))
     assert len(payload) == sample_df["country"].nunique()
+
+
+def test_metrics_skips_invalid_metric_semantics(tmp_path, agent_ctx_factory) -> None:
+    df = pd.DataFrame(
+        {
+            "segment": ["A", "A", "B", "B"],
+            "conversion_rate": [0.12, 0.18, 0.25, 0.2],
+        }
+    )
+    ctx = agent_ctx_factory(tmp_path, df=df)
+    ctx["memory"].set(
+        "result.planner",
+        {
+            "analysis_type": "segment_comparison",
+            "tasks": [
+                {
+                    "id": "T1",
+                    "type": "groupby_agg",
+                    "params": {"group_by": "segment", "metric": "conversion_rate", "agg": "sum"},
+                }
+            ],
+        },
+    )
+    out = MetricsAgent().run(ctx)
+    assert out["failed"] == []
+    assert out["computed"] == []
+    assert len(out["skipped"]) == 1
+    assert "Invalid metric semantics" in out["skipped"][0]["reason"]
+    assert any(item["status"] == "invalid" for item in out["semantic_validation"])

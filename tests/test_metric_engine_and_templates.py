@@ -6,7 +6,9 @@ import pandas as pd
 import pytest
 
 from ai_data_analyst_agents.core.kpi_templates import (
+    default_agg_for_metric,
     detect_business_domain,
+    is_agg_allowed_for_metric,
     pick_cohort_columns,
     pick_template_dimension,
 )
@@ -23,6 +25,13 @@ def test_business_domain_and_template_helpers() -> None:
     assert detect_business_domain("Show mrr and churn by plan", schema_cols) == "saas"
     assert pick_template_dimension("saas", schema_cols) == "plan"
     assert pick_cohort_columns("saas", schema_cols) == ("account_id", "signup_date")
+
+
+def test_metric_semantics_helpers() -> None:
+    assert default_agg_for_metric("revenue") == "sum"
+    assert default_agg_for_metric("order_id") == "count"
+    assert is_agg_allowed_for_metric("conversion_rate", "mean")
+    assert not is_agg_allowed_for_metric("conversion_rate", "sum")
 
 
 def test_compute_template_kpis_ecommerce(sample_df: pd.DataFrame) -> None:

@@ -6,7 +6,9 @@ import re
 
 from ai_data_analyst_agents.core.agent_base import Agent
 from ai_data_analyst_agents.core.kpi_templates import (
+    default_agg_for_metric,
     detect_business_domain,
+    is_agg_allowed_for_metric,
     pick_cohort_columns,
 )
 from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
@@ -137,6 +139,93 @@ ALLOWED_TASK_TYPES = {
     "statistical_test",
     "ab_test",
     "ols_regression",
+}
+
+SUPPORTED_ANALYSIS_TYPES = {
+    "descriptive",
+    "trend",
+    "segment_comparison",
+    "diagnostic",
+    "experiment_ab",
+    "forecasting_unsupported",
+    "impossible",
+}
+
+ALLOWED_TASKS_BY_ANALYSIS_TYPE: Dict[str, set[str]] = {
+    "descriptive": {
+        "groupby_agg",
+        "groupby2_agg",
+        "distribution",
+        "topk",
+        "kpi_template_apply",
+        "segment_analysis",
+        "metric_definition",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "trend": {
+        "timeseries_agg",
+        "groupby_agg",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "cohort_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "segment_comparison": {
+        "groupby_agg",
+        "groupby2_agg",
+        "filter_agg",
+        "group_distribution",
+        "topk",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "diagnostic": {
+        "groupby_agg",
+        "groupby2_agg",
+        "filter_agg",
+        "correlation",
+        "distribution",
+        "group_distribution",
+        "timeseries_agg",
+        "kpi_template_apply",
+        "segment_analysis",
+        "metric_definition",
+        "statistical_test",
+        "ols_regression",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "experiment_ab": {
+        "ab_test",
+        "statistical_test",
+        "groupby_agg",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "forecasting_unsupported": {
+        "timeseries_agg",
+        "groupby_agg",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "cohort_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "impossible": {
+        "kpi_template_apply",
+        "distribution",
+        "groupby_agg",
+    },
 }
 
 
@@ -334,12 +423,269 @@ def _choose_regression_predictors(numeric_cols: List[str], target: str | None) -
     return out[:4]
 
 
+def _classify_analysis_type(
+    question: str,
+    *,
+    metric: str | None,
+    time_col: str | None,
+    segment_cols: List[str],
+    experiment_group_col: str | None,
+) -> tuple[str, List[str], str]:
+    q = (question or "").lower()
+    blocked: List[str] = []
+
+    if _contains_any(q, {"forecast", "predict", "projection", "next month", "next quarter", "next year"}):
+        if not time_col:
+            blocked.append("missing_time_column")
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "forecasting_unsupported", blocked, "Forecast-like request; pipeline is limited to historical analysis."
+
+    if _contains_any(q, AB_KEYWORDS):
+        if not experiment_group_col:
+            blocked.append("missing_experiment_group_column")
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        if blocked:
+            return "impossible", blocked, "Experiment intent detected but required columns are unavailable."
+        return "experiment_ab", blocked, "Experiment intent detected."
+
+    if _contains_any(q, REGRESSION_KEYWORDS):
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "diagnostic", blocked, "Regression/association intent detected."
+
+    if _contains_any(q, WHY_KEYWORDS):
+        if not segment_cols:
+            blocked.append("missing_segment_column")
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "diagnostic", blocked, "Diagnostic/driver intent detected."
+
+    if _contains_any(q, TIME_KEYWORDS):
+        if not time_col:
+            blocked.append("missing_time_column")
+            return "impossible", blocked, "Trend intent detected but no time column is available."
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "trend", blocked, "Trend/time intent detected."
+
+    if _contains_any(q, COMPARE_KEYWORDS):
+        if not segment_cols:
+            blocked.append("missing_segment_column")
+            return "impossible", blocked, "Comparison intent detected but no segment column is available."
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "segment_comparison", blocked, "Segment comparison intent detected."
+
+    if not metric:
+        blocked.append("missing_numeric_metric")
+    return "descriptive", blocked, "Default descriptive route."
+
+
+def _route_comparison_logic(
+    analysis_type: str,
+    *,
+    metric: str | None,
+    time_col: str | None,
+    segment_cols: List[str],
+    experiment_group_col: str | None,
+) -> str:
+    if analysis_type == "experiment_ab":
+        return (
+            f"Compare treatment vs control on {metric} using {experiment_group_col}; "
+            "estimate lift and significance."
+        )
+    if analysis_type == "trend":
+        return f"Evaluate period-over-period movement of {metric} on {time_col}."
+    if analysis_type == "segment_comparison":
+        seg = segment_cols[0] if segment_cols else "segments"
+        return f"Compare {metric} across {seg} with absolute and relative deltas."
+    if analysis_type == "diagnostic":
+        seg = segment_cols[0] if segment_cols else "major dimensions"
+        return f"Decompose {metric} by {seg}, volume, and mix to identify drivers."
+    if analysis_type == "forecasting_unsupported":
+        return f"Provide historical baseline for {metric}; do not forecast future values."
+    if analysis_type == "impossible":
+        return "Return infeasibility summary with missing requirements."
+    return f"Summarize overall {metric} and key segment breakdowns."
+
+
+def _route_success_criterion(analysis_type: str) -> str:
+    if analysis_type == "experiment_ab":
+        return "Report lift and p-value at alpha=0.05 with valid control/treatment groups."
+    if analysis_type == "trend":
+        return "Report trend direction and magnitude with sufficient time periods."
+    if analysis_type == "segment_comparison":
+        return "Report ranked segment deltas with absolute and percentage difference."
+    if analysis_type == "diagnostic":
+        return "Report top contributors with artifact-backed evidence."
+    if analysis_type == "forecasting_unsupported":
+        return "Report historical trend only and explicitly flag forecasting as unsupported."
+    if analysis_type == "impossible":
+        return "Return a precise infeasibility explanation with missing requirements."
+    return "Return descriptive KPIs grounded in computed artifacts."
+
+
+def _build_planning_contract(
+    *,
+    question: str,
+    schema_cols: List[str],
+    date_cols: List[str],
+    metric_hint: str | None,
+    primary_dim_hint: str | None,
+    secondary_dim_hint: str | None,
+    analysis_type: str,
+    blocked_requirements: List[str],
+    intake_plan: Dict[str, Any] | None,
+    experiment_group_col: str | None,
+    control_label: str | None,
+    treatment_label: str | None,
+) -> Dict[str, Any]:
+    intake = dict((intake_plan or {}).get("framing", {}) or {})
+
+    target_metric = intake.get("target_metric")
+    if target_metric not in schema_cols:
+        target_metric = metric_hint if metric_hint in schema_cols else None
+
+    time_col = intake.get("time_column")
+    if time_col not in schema_cols:
+        time_col = date_cols[0] if date_cols else None
+
+    segment_columns = intake.get("segment_columns")
+    if not isinstance(segment_columns, list):
+        segment_columns = []
+    segment_columns = [str(c) for c in segment_columns if str(c) in schema_cols]
+    if not segment_columns:
+        for c in [primary_dim_hint, secondary_dim_hint]:
+            if c and c in schema_cols and c not in segment_columns:
+                segment_columns.append(c)
+
+    aggregation_level = str(intake.get("aggregation_level", "")).strip()
+    if not aggregation_level:
+        if analysis_type == "trend" and time_col:
+            aggregation_level = f"time:{time_col}"
+        elif analysis_type == "experiment_ab" and experiment_group_col:
+            aggregation_level = f"group:{experiment_group_col}"
+        elif segment_columns:
+            aggregation_level = f"segment:{segment_columns[0]}"
+        else:
+            aggregation_level = "overall"
+
+    metric_aggregation = default_agg_for_metric(str(target_metric or "metric"), preferred=intake.get("metric_aggregation"))
+    comparison_logic = str(intake.get("comparison_logic", "")).strip() or _route_comparison_logic(
+        analysis_type,
+        metric=target_metric,
+        time_col=time_col,
+        segment_cols=segment_columns,
+        experiment_group_col=experiment_group_col,
+    )
+    success_criterion = str(intake.get("success_criterion", "")).strip() or _route_success_criterion(analysis_type)
+
+    limitations = intake.get("analysis_limitations")
+    if not isinstance(limitations, list):
+        limitations = []
+    for req in blocked_requirements:
+        if req == "missing_time_column":
+            limitations.append("No usable time column is available for time-based analysis.")
+        elif req == "missing_segment_column":
+            limitations.append("No suitable segment column is available for segment comparison.")
+        elif req == "missing_numeric_metric":
+            limitations.append("No numeric metric candidate is available for quantitative analysis.")
+        elif req == "missing_experiment_group_column":
+            limitations.append("No experiment group column (control/treatment) is available.")
+    if analysis_type == "forecasting_unsupported":
+        limitations.append("Forecasting is unsupported; only historical analysis is provided.")
+    if analysis_type == "impossible":
+        limitations.append("Question cannot be fully answered with available data constraints.")
+    if not limitations:
+        limitations.append("All conclusions are limited to provided columns and computed artifacts.")
+    limitations = list(dict.fromkeys(str(x) for x in limitations))
+
+    feasibility_status = str(intake.get("feasibility_status", "")).strip()
+    if not feasibility_status:
+        feasibility_status = "infeasible" if analysis_type == "impossible" else ("partially_feasible" if blocked_requirements else "feasible")
+
+    contract = {
+        "analysis_type": analysis_type,
+        "target_metric": target_metric,
+        "aggregation_level": aggregation_level,
+        "metric_aggregation": metric_aggregation,
+        "time_column": time_col,
+        "segment_columns": segment_columns,
+        "comparison_logic": comparison_logic,
+        "success_criterion": success_criterion,
+        "analysis_limitations": limitations,
+        "feasibility_status": feasibility_status,
+        "experiment_group_column": experiment_group_col,
+        "experiment_control_label": control_label,
+        "experiment_treatment_label": treatment_label,
+    }
+    return contract
+
+
+def _route_seed_tasks(planning_contract: Dict[str, Any], business_domain: str) -> List[Dict[str, Any]]:
+    analysis_type = str(planning_contract.get("analysis_type", "descriptive"))
+    metric = planning_contract.get("target_metric")
+    agg = str(planning_contract.get("metric_aggregation", "sum"))
+    time_col = planning_contract.get("time_column")
+    segments = planning_contract.get("segment_columns") or []
+    group_col = planning_contract.get("experiment_group_column")
+    control = planning_contract.get("experiment_control_label") or "control"
+    treatment = planning_contract.get("experiment_treatment_label") or "treatment"
+
+    seeded: List[Dict[str, Any]] = [{"type": "kpi_template_apply", "params": {"domain": business_domain}}]
+    if metric:
+        seeded.append({"type": "distribution", "params": {"column": metric, "quantiles": [0.05, 0.25, 0.5, 0.75, 0.95]}})
+    if segments and metric:
+        seeded.append(
+            {
+                "type": "segment_analysis",
+                "params": {"segment_by": segments[0], "metric": metric, "agg": agg, "limit": 100},
+            }
+        )
+    if analysis_type in {"trend", "forecasting_unsupported"} and time_col and metric:
+        seeded.append({"type": "timeseries_agg", "params": {"date_col": time_col, "metric": metric, "freq": "M", "agg": agg}})
+    if analysis_type == "segment_comparison" and segments and metric:
+        seeded.append({"type": "groupby_agg", "params": {"group_by": segments[0], "metric": metric, "agg": agg, "limit": 1000}})
+    if analysis_type == "experiment_ab" and group_col and metric:
+        seeded.append(
+            {
+                "type": "ab_test",
+                "params": {
+                    "group_col": group_col,
+                    "control": control,
+                    "treatment": treatment,
+                    "metric": metric,
+                    "metric_type": "auto",
+                    "alpha": 0.05,
+                },
+            }
+        )
+    return seeded
+
+
+def _filter_tasks_by_analysis_type(tasks: List[Dict[str, Any]], analysis_type: str) -> List[Dict[str, Any]]:
+    allowed = ALLOWED_TASKS_BY_ANALYSIS_TYPE.get(analysis_type, ALLOWED_TASK_TYPES)
+    return [t for t in tasks if str(t.get("type", "")).strip() in allowed]
+
+
+def _resolve_metric_agg(metric: str, agg: str | None, *, fallback: str | None = None) -> str:
+    candidate = str(agg or "").strip().lower() if agg is not None else ""
+    if candidate and is_agg_allowed_for_metric(metric, candidate):
+        return candidate
+    return default_agg_for_metric(metric, preferred=fallback or candidate or None)
+
+
 def _sanitize_and_number_tasks(
     tasks: List[Dict[str, Any]],
     schema_cols: List[str],
     numeric_cols: List[str],
+    planning_contract: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     clean: List[Dict[str, Any]] = []
+    contract_metric = str((planning_contract or {}).get("target_metric") or "")
+    contract_agg = str((planning_contract or {}).get("metric_aggregation") or "").strip().lower()
 
     for task in tasks:
         ttype = str(task.get("type", "")).strip()
@@ -351,7 +697,8 @@ def _sanitize_and_number_tasks(
         if ttype == "groupby_agg":
             if p.get("group_by") not in schema_cols or p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("limit", 50)
 
         elif ttype == "groupby2_agg":
@@ -359,7 +706,8 @@ def _sanitize_and_number_tasks(
                 continue
             if p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("limit", 100)
 
         elif ttype == "filter_agg":
@@ -367,7 +715,8 @@ def _sanitize_and_number_tasks(
                 continue
             if "filter_val" not in p:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
 
         elif ttype == "correlation":
             if p.get("x") not in numeric_cols or p.get("y") not in numeric_cols:
@@ -385,7 +734,8 @@ def _sanitize_and_number_tasks(
                 continue
             if p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("quantiles", [0.5, 0.75, 0.9, 0.95, 0.99])
 
         elif ttype == "recency_by_group":
@@ -397,14 +747,16 @@ def _sanitize_and_number_tasks(
         elif ttype == "topk":
             if p.get("by") not in schema_cols or p.get("metric") not in numeric_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("k", 10)
 
         elif ttype == "timeseries_agg":
             if p.get("date_col") not in schema_cols or p.get("metric") not in schema_cols:
                 continue
             p.setdefault("freq", "M")
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
 
         elif ttype == "sql_query":
             query = str(p.get("query", "")).strip()
@@ -442,7 +794,10 @@ def _sanitize_and_number_tasks(
                 continue
             if not metric_col and not expression:
                 continue
-            p.setdefault("agg", "sum")
+            if metric_col:
+                p["agg"] = _resolve_metric_agg(metric_col, p.get("agg"), fallback=contract_agg or "sum")
+            else:
+                p.setdefault("agg", contract_agg or "sum")
             if metric_col and metric_col not in schema_cols:
                 continue
             if p.get("group_by") and p.get("group_by") not in schema_cols:
@@ -453,7 +808,8 @@ def _sanitize_and_number_tasks(
                 continue
             if p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("limit", 100)
 
         elif ttype == "cohort_analysis":
@@ -907,18 +1263,55 @@ class PlannerAgent(Agent):
         column_profiles = profile.get("column_profiles", []) or []
         sql_schema = ctx.get("sql_schema") or profile.get("sql_schema")
         sql_source = ctx.get("sql_source")
+        intake_plan = ctx["memory"].get("result.intake", {}) or {}
 
         numeric_cols = [c for c in schema_cols if _is_numeric_dtype(str(schema_dtypes.get(c, "")))]
+        date_cols = [c for c in schema_cols if _is_datetime_dtype(str(schema_dtypes.get(c, "")))]
+        for c in datetime_candidates:
+            if c in schema_cols and c not in date_cols:
+                date_cols.append(c)
         categorical_cols = [c for c in schema_cols if c not in numeric_cols]
         metric_hint = _choose_metric(question, schema_cols, numeric_cols)
         primary_dim_hint = _choose_primary_dim(question, schema_cols, categorical_cols)
         secondary_dim_hint = _choose_secondary_dim(question, schema_cols, primary_dim_hint)
+        experiment_group_col = _choose_experiment_group_col(schema_cols, column_profiles)
+        control_label, treatment_label = _extract_experiment_labels(column_profiles, experiment_group_col)
         q_lc = question.lower()
         count_intent = _contains_any(q_lc, COUNT_KEYWORDS)
         count_metric = "order_id" if "order_id" in schema_cols else ("transaction_id" if "transaction_id" in schema_cols else None)
         main_metric = count_metric if count_intent and count_metric else metric_hint
-        main_agg = "count" if count_intent and count_metric else "sum"
+        main_agg = "count" if count_intent and count_metric else default_agg_for_metric(str(main_metric or "metric"))
         business_domain = detect_business_domain(question, schema_cols)
+
+        intake_analysis_type = str(intake_plan.get("analysis_type", "")).strip()
+        intake_blocked = intake_plan.get("blocked_requirements")
+        blocked_requirements = [str(x) for x in intake_blocked] if isinstance(intake_blocked, list) else []
+        if intake_analysis_type not in SUPPORTED_ANALYSIS_TYPES:
+            analysis_type, blocked_requirements, routing_reason = _classify_analysis_type(
+                question,
+                metric=main_metric,
+                time_col=date_cols[0] if date_cols else None,
+                segment_cols=[x for x in [primary_dim_hint, secondary_dim_hint] if x],
+                experiment_group_col=experiment_group_col,
+            )
+        else:
+            analysis_type = intake_analysis_type
+            routing_reason = str(intake_plan.get("routing_reason", "")).strip() or "Using intake route."
+
+        planning_contract = _build_planning_contract(
+            question=question,
+            schema_cols=schema_cols,
+            date_cols=date_cols,
+            metric_hint=main_metric,
+            primary_dim_hint=primary_dim_hint,
+            secondary_dim_hint=secondary_dim_hint,
+            analysis_type=analysis_type,
+            blocked_requirements=blocked_requirements,
+            intake_plan=intake_plan,
+            experiment_group_col=experiment_group_col,
+            control_label=control_label,
+            treatment_label=treatment_label,
+        )
 
         heuristic_tasks = _build_heuristic_tasks(
             question=question,
@@ -951,6 +1344,8 @@ class PlannerAgent(Agent):
             "schema": {"columns": schema_cols, "dtypes": schema_dtypes},
             "source": ctx.get("source", {"type": "csv"}),
             "suggested_domain": business_domain,
+            "analysis_type": analysis_type,
+            "planning_contract": planning_contract,
             "sql_schema": sql_schema if isinstance(sql_schema, dict) else None,
         }
 
@@ -980,8 +1375,16 @@ class PlannerAgent(Agent):
         else:
             logger.warning("[Planner] Empty LLM response. Using deterministic plan.")
 
+        seeded_tasks = _route_seed_tasks(planning_contract, business_domain)
         merged_tasks = _merge_task_lists(_merge_task_lists(heuristic_tasks, sql_heuristic_tasks), llm_tasks)
-        final_tasks = _sanitize_and_number_tasks(merged_tasks, schema_cols, numeric_cols)
+        route_filtered = _filter_tasks_by_analysis_type(merged_tasks, analysis_type)
+        routed_tasks = _merge_task_lists(seeded_tasks, route_filtered)
+        final_tasks = _sanitize_and_number_tasks(
+            routed_tasks,
+            schema_cols,
+            numeric_cols,
+            planning_contract=planning_contract,
+        )
 
         if not final_tasks:
             fallback_col = "revenue" if "revenue" in numeric_cols else (numeric_cols[0] if numeric_cols else None)
@@ -1004,8 +1407,16 @@ class PlannerAgent(Agent):
                 ]
 
         plan = {
+            "analysis_type": analysis_type,
+            "routing_reason": routing_reason,
+            "blocked_requirements": blocked_requirements,
+            "feasibility_status": planning_contract.get("feasibility_status"),
+            "planning_contract": planning_contract,
             "tasks": final_tasks,
-            "notes": f"Deterministic-first plan with optional LLM enrichment. Domain={business_domain}.",
+            "notes": (
+                f"Deterministic-first plan with optional LLM enrichment. "
+                f"Domain={business_domain}, route={analysis_type}."
+            ),
         }
         store.write_json("analysis_tasks.json", plan)
         logger.info("[Planner] Wrote analysis_tasks.json")

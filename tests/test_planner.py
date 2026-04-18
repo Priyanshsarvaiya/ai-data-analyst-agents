@@ -53,6 +53,10 @@ def test_planner_fallback_builds_core_tasks(tmp_path, sample_df: pd.DataFrame, p
     plan = PlannerAgent().run(ctx)
     tasks = plan["tasks"]
 
+    assert plan["analysis_type"] == "diagnostic"
+    assert "planning_contract" in plan
+    assert plan["planning_contract"]["target_metric"] == "revenue"
+    assert plan["planning_contract"]["comparison_logic"]
     assert any(t["type"] == "filter_agg" and t["params"].get("filter_val") == "India" for t in tasks)
     assert any(t["type"] == "groupby_agg" and t["params"].get("group_by") == "country" for t in tasks)
     assert any(t["type"] == "kpi_template_apply" for t in tasks)
@@ -155,6 +159,7 @@ def test_planner_adds_ab_test_for_experiment_questions(tmp_path, ab_test_df: pd.
     ctx["memory"].set("result.profiling", profile)
 
     plan = PlannerAgent().run(ctx)
+    assert plan["analysis_type"] == "experiment_ab"
     assert any(t["type"] == "ab_test" for t in plan["tasks"])
 
 
@@ -188,3 +193,21 @@ def test_planner_does_not_add_generic_stat_test_for_why_customer_question(tmp_pa
 
     plan = PlannerAgent().run(ctx)
     assert all(t["type"] != "statistical_test" for t in plan["tasks"])
+
+
+def test_planner_routes_forecast_to_historical_tasks_only(tmp_path, sample_df: pd.DataFrame, patch_llm) -> None:
+    question = "Forecast next month revenue by country"
+    ctx = _make_ctx(tmp_path, sample_df, question)
+    profile = {
+        "columns": sample_df.columns.tolist(),
+        "dtypes": {c: str(sample_df[c].dtype) for c in sample_df.columns},
+        "datetime_candidates": detect_probable_datetime_columns(sample_df),
+        "column_profiles": infer_column_profiles(sample_df),
+    }
+    ctx["memory"].set("result.profiling", profile)
+
+    plan = PlannerAgent().run(ctx)
+    assert plan["analysis_type"] == "forecasting_unsupported"
+    assert any(t["type"] == "timeseries_agg" for t in plan["tasks"])
+    assert all(t["type"] != "ols_regression" for t in plan["tasks"])
+    assert all(t["type"] != "ab_test" for t in plan["tasks"])
