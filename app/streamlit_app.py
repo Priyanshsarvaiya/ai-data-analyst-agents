@@ -32,9 +32,247 @@ os.chdir(ROOT)
 st.set_page_config(page_title="AI Data Analyst Agents", layout="wide")
 
 
-def _inject_styles() -> None:
-    st.markdown(
-        """
+def _inject_styles(theme: str = "dark") -> None:
+    theme_mode = (theme or "dark").strip().lower()
+    light_overrides = """
+          :root { color-scheme: light; }
+          .stApp {
+            background:
+              radial-gradient(1100px 460px at 88% -12%, rgba(126, 195, 255, 0.18), transparent 66%),
+              radial-gradient(760px 360px at -8% -10%, rgba(79, 149, 255, 0.14), transparent 62%),
+              #f3f7ff !important;
+            color: #172741 !important;
+          }
+          header[data-testid="stHeader"] {
+            background: rgba(244, 248, 255, 0.86) !important;
+            border-bottom: 1px solid #d7e3fb !important;
+          }
+          [data-testid="stToolbar"] {
+            color: #2a4575 !important;
+          }
+          [data-testid="stMarkdownContainer"] p,
+          [data-testid="stMarkdownContainer"] li,
+          [data-testid="stMarkdownContainer"] span,
+          [data-testid="stText"] {
+            color: #172741 !important;
+          }
+          .hero {
+            background: linear-gradient(120deg, #eef4ff 0%, #ddeafe 55%, #d8fbf3 100%) !important;
+            color: #173458 !important;
+            border: 1px solid #bcd0ef !important;
+            box-shadow: 0 14px 28px rgba(80, 114, 170, 0.18) !important;
+          }
+          .hero p { color: #3a5a8a !important; }
+          .auth-shell {
+            background: linear-gradient(170deg, rgba(244, 249, 255, 0.98), rgba(236, 244, 255, 0.98)) !important;
+            border: 1px solid #c6d7f5 !important;
+            box-shadow: 0 14px 28px rgba(83, 116, 172, 0.2) !important;
+          }
+          .auth-kicker { color: #3f6294 !important; }
+          .auth-title { color: #19355e !important; }
+          .auth-note { color: #4e6e9f !important; }
+          .auth-chip {
+            border: 1px solid #bfd1f0 !important;
+            background: #edf4ff !important;
+            color: #2f507f !important;
+          }
+          .auth-form-title { color: #234677 !important; }
+          div[data-testid="stRadio"] > div {
+            background: #eef4ff !important;
+            border: 1px solid #c4d7f8 !important;
+          }
+          div[data-testid="stForm"] {
+            background: linear-gradient(180deg, rgba(248, 252, 255, 0.98), rgba(239, 246, 255, 0.98)) !important;
+            border: 1px solid #c4d7f8 !important;
+            box-shadow: 0 10px 20px rgba(88, 122, 178, 0.16) !important;
+          }
+          div[data-testid="stForm"] label p,
+          div[data-testid="stForm"] label span,
+          div[data-testid="stRadio"] label p,
+          div[data-testid="stRadio"] label span {
+            color: #203f6d !important;
+          }
+          div[data-testid="stRadio"] input[type="radio"] {
+            accent-color: #2f74db !important;
+          }
+          div[data-baseweb="select"] > div,
+          div[data-baseweb="input"] > div,
+          div[data-baseweb="textarea"] > div {
+            background: #ffffff !important;
+            border: 1px solid #b9ceef !important;
+          }
+          div[data-baseweb="input"] > div {
+            overflow: hidden !important;
+          }
+          div[data-baseweb="input"] input,
+          div[data-baseweb="select"] input,
+          div[data-baseweb="textarea"] textarea {
+            color: #173458 !important;
+          }
+          div[data-baseweb="input"] input::placeholder,
+          div[data-baseweb="textarea"] textarea::placeholder {
+            color: #6d86ad !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] {
+            background: transparent !important;
+            border-left: 1px solid #d1ddf3 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border-radius: 0 !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] button {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            min-height: 0 !important;
+            height: 100% !important;
+            min-width: 3rem !important;
+            border-radius: 0 !important;
+            padding: 0 !important;
+            color: #305387 !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] button:hover {
+            background: rgba(47, 116, 219, 0.08) !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] *,
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] *::before,
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] *::after {
+            background: transparent !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] svg {
+            fill: #305387 !important;
+          }
+          button[kind="secondary"] {
+            background: #e7f0ff !important;
+            border: 1px solid #b8cdf0 !important;
+            color: #234677 !important;
+          }
+          div[data-testid="stFormSubmitButton"] button {
+            background: linear-gradient(120deg, #2f74db, #4b9dff) !important;
+            border: 1px solid #3e81e8 !important;
+            color: #f5faff !important;
+            box-shadow: none !important;
+          }
+          div[data-testid="stFormSubmitButton"] button:hover {
+            border: 1px solid #62a2ff !important;
+            color: #ffffff !important;
+          }
+          div[data-testid="stForm"] button[kind="primary"] {
+            background: linear-gradient(120deg, #2f74db, #4b9dff) !important;
+            border: 1px solid #3e81e8 !important;
+            color: #f5faff !important;
+          }
+          div[data-testid="stForm"] button[kind="primary"]:hover {
+            border: 1px solid #62a2ff !important;
+          }
+          .stTabs [data-baseweb="tab"] {
+            background: #eaf2ff !important;
+            border: 1px solid #c0d4f5 !important;
+            color: #2b4f82 !important;
+          }
+          .stTabs [aria-selected="true"] {
+            background: #dce9ff !important;
+            border-color: #8cb2ea !important;
+            color: #173f76 !important;
+          }
+          [data-testid="stCodeBlockContainer"] pre {
+            background: #f5f9ff !important;
+            border: 1px solid #c6d8f6 !important;
+            color: #1d385f !important;
+          }
+          div[data-testid="stDataFrame"] div[role="table"] {
+            border: 1px solid #c6d8f6 !important;
+          }
+          div[data-testid="stSidebar"],
+          section[data-testid="stSidebar"] {
+            background:
+              radial-gradient(620px 240px at 120% -12%, rgba(138, 194, 255, 0.3), transparent 72%),
+              linear-gradient(180deg, #f2f7ff 0%, #e9f1ff 100%) !important;
+            border-right: 1px solid #c1d4f4 !important;
+          }
+          div[data-testid="stSidebar"] * {
+            color: #1f3f6f !important;
+          }
+          div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+          div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+          div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3,
+          div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h4,
+          div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+          div[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span,
+          div[data-testid="stSidebar"] label p,
+          div[data-testid="stSidebar"] label span {
+            color: #1f3f6f !important;
+            background: transparent !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="select"] > div {
+            background: #ffffff !important;
+            border: 1px solid #bdd1f2 !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="select"] div {
+            color: #1a365f !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="select"] svg {
+            fill: #355a8f !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="radio"] label {
+            background: #eef4ff !important;
+            border: 1px solid #bdd1f2 !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] > div,
+          div[data-testid="stSidebar"] [data-baseweb="textarea"] > div {
+            background: #ffffff !important;
+            border: 1px solid #bdd1f2 !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] input,
+          div[data-testid="stSidebar"] [data-baseweb="textarea"] textarea {
+            color: #1a365f !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] input::placeholder,
+          div[data-testid="stSidebar"] [data-baseweb="textarea"] textarea::placeholder {
+            color: #6e87ad !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] [data-baseweb="input-suffix"] button {
+            color: #355a8f !important;
+          }
+          div[data-testid="stSidebar"] [data-baseweb="input"] [data-baseweb="input-suffix"] svg {
+            fill: #355a8f !important;
+          }
+          div[data-testid="stSidebar"] button {
+            background: linear-gradient(120deg, #2f74db, #4b9dff) !important;
+            border: 1px solid #4b8feb !important;
+            color: #f7fbff !important;
+          }
+          div[data-testid="stSidebar"] button:hover {
+            border: 1px solid #70aaff !important;
+          }
+          div[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+            background: #f2f7ff !important;
+            border: 1px dashed #b7cced !important;
+          }
+          div[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] * {
+            color: #1f3f6f !important;
+          }
+          div[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] span,
+          div[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] small {
+            color: #5a759f !important;
+          }
+          div[data-testid="stSidebar"] [data-testid="stFileUploader"] button[kind="secondary"] {
+            background: #e8f1ff !important;
+            border: 1px solid #a8c2eb !important;
+            color: #234677 !important;
+          }
+          div[data-testid="stSidebar"] [data-testid="stFileUploader"] button[kind="secondary"]:hover {
+            border: 1px solid #84aee4 !important;
+          }
+          section[data-testid="stSidebar"] hr {
+            border-color: #bfd2f1 !important;
+          }
+          .mono {
+            color: #4d6f9f !important;
+          }
+    """ if theme_mode == "light" else ""
+
+    css = """
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
           :root {
@@ -113,41 +351,70 @@ def _inject_styles() -> None:
             font-size: 0.95rem;
           }
           .auth-shell {
-            max-width: 940px;
-            margin: 1.2rem auto 0;
-            padding: 1.2rem 1.25rem;
-            border-radius: 24px;
-            background: linear-gradient(170deg, rgba(17, 27, 47, 0.96), rgba(14, 23, 39, 0.92));
-            border: 1px solid #2d426e;
-            box-shadow: 0 18px 36px rgba(3, 8, 20, 0.5);
+            max-width: 760px;
+            margin: 1.1rem auto 0.55rem;
+            padding: 1.15rem 1.2rem 1rem;
+            border-radius: 8px;
+            background: linear-gradient(170deg, rgba(18, 31, 56, 0.96), rgba(12, 23, 44, 0.94));
+            border: 1px solid #355288;
+            box-shadow: 0 14px 30px rgba(4, 10, 24, 0.42);
+          }
+          .auth-kicker {
+            margin: 0 0 0.35rem;
+            color: #90add9;
+            font-size: 0.76rem;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
           }
           .auth-title {
-            margin: 0 0 0.25rem;
+            margin: 0 0 0.35rem;
             color: var(--ink);
             font-weight: 700;
+            font-size: 2rem;
+            line-height: 1.06;
           }
           .auth-note {
-            margin: 0 0 0.8rem;
-            color: var(--muted);
-            font-size: 0.92rem;
+            margin: 0;
+            color: #c7d9fa;
+            font-size: 1.02rem;
+          }
+          .auth-chip-row {
+            margin-top: 0.75rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+          }
+          .auth-chip {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid #3a588f;
+            background: rgba(18, 31, 56, 0.82);
+            color: #cfe2ff;
+            border-radius: 8px;
+            padding: 0.2rem 0.5rem;
+            font-size: 0.77rem;
+            font-weight: 600;
+            line-height: 1.2;
           }
           .auth-form-title {
-            margin: 0.2rem 0 0.45rem;
-            color: #dceaff;
-            font-size: 1.02rem;
+            margin: 0.3rem 0 0.55rem;
+            color: #e5f0ff;
+            font-size: 1.14rem;
             font-weight: 700;
           }
           div[data-testid="stRadio"] > div {
-            background: rgba(18, 31, 55, 0.95);
-            border: 1px solid #324a7a;
-            border-radius: 12px;
-            padding: 0.3rem 0.45rem 0.15rem;
+            background: rgba(16, 28, 52, 0.98);
+            border: 1px solid #375690;
+            border-radius: 8px;
+            padding: 0.28rem 0.4rem 0.15rem;
           }
           div[data-testid="stForm"] {
-            border: 1px solid #304a78;
-            border-radius: 16px;
-            padding: 0.75rem 0.9rem 0.45rem;
-            background: linear-gradient(180deg, rgba(18, 29, 52, 0.96), rgba(14, 24, 42, 0.96));
+            border: 1px solid #3a5b98;
+            border-radius: 8px;
+            padding: 0.85rem 0.95rem 0.55rem;
+            background: linear-gradient(180deg, rgba(16, 27, 50, 0.97), rgba(12, 22, 42, 0.97));
+            box-shadow: 0 10px 24px rgba(2, 8, 20, 0.36);
           }
           div[data-testid="stForm"] label p,
           div[data-testid="stForm"] label span {
@@ -161,17 +428,37 @@ def _inject_styles() -> None:
           }
           div[data-baseweb="select"] > div,
           div[data-baseweb="input"] > div {
-            background: #10192f !important;
-            border: 1px solid #39538a !important;
+            background: #0f1a33 !important;
+            border: 1px solid #4566a4 !important;
             box-shadow: none !important;
+          }
+          div[data-baseweb="input"] > div {
+            overflow: hidden !important;
           }
           div[data-baseweb="input"] [data-baseweb="input-suffix"] {
             background: transparent !important;
+            border-left: 1px solid #2b3f66 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border-radius: 0 !important;
           }
           div[data-baseweb="input"] [data-baseweb="input-suffix"] button {
             background: transparent !important;
             border: none !important;
+            min-height: 0 !important;
+            height: 100% !important;
+            min-width: 3rem !important;
+            border-radius: 0 !important;
+            padding: 0 !important;
             color: #dceaff !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] button:hover {
+            background: rgba(111, 161, 232, 0.16) !important;
+          }
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] *,
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] *::before,
+          div[data-baseweb="input"] [data-baseweb="input-suffix"] *::after {
+            background: transparent !important;
           }
           div[data-baseweb="input"] [data-baseweb="input-suffix"] svg {
             fill: #dceaff !important;
@@ -186,11 +473,11 @@ def _inject_styles() -> None:
             color: #8ca6d0 !important;
           }
           div[data-baseweb="textarea"] > div {
-            background: #10192f !important;
-            border: 1px solid #39538a !important;
+            background: #0f1a33 !important;
+            border: 1px solid #4566a4 !important;
           }
           button {
-            border-radius: 10px !important;
+            border-radius: 8px !important;
             min-height: 2.65rem !important;
             font-weight: 700 !important;
             letter-spacing: 0.2px;
@@ -201,12 +488,21 @@ def _inject_styles() -> None:
             color: #dceaff !important;
           }
           div[data-testid="stForm"] button[kind="primary"] {
-            background: linear-gradient(120deg, #245ca5, #1e8e9a) !important;
-            border: 1px solid #2b6cbe !important;
-            color: #eef6ff !important;
+            background: linear-gradient(120deg, #ff5a64, #ff6e4b) !important;
+            border: 1px solid #ff7c61 !important;
+            color: #fff7f3 !important;
           }
           div[data-testid="stForm"] button[kind="primary"]:hover {
-            border: 1px solid #5b9fe8 !important;
+            border: 1px solid #ff9a7c !important;
+            color: #ffffff !important;
+          }
+          div[data-testid="stFormSubmitButton"] button {
+            background: linear-gradient(120deg, #ff5a64, #ff6e4b) !important;
+            border: 1px solid #ff7c61 !important;
+            color: #fff7f3 !important;
+          }
+          div[data-testid="stFormSubmitButton"] button:hover {
+            border: 1px solid #ff9a7c !important;
             color: #ffffff !important;
           }
           div[data-testid="stForm"] [data-testid="stMarkdownContainer"] p {
@@ -303,10 +599,10 @@ def _inject_styles() -> None:
             font-size: 0.82rem;
             color: #b9d0f4;
           }
+          __LIGHT_OVERRIDES__
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+        """
+    st.markdown(css.replace("__LIGHT_OVERRIDES__", light_overrides), unsafe_allow_html=True)
 
 
 def _safe_read_text(path: Path) -> str:
@@ -395,15 +691,46 @@ def _utc_now() -> datetime:
 def _init_session_state() -> None:
     st.session_state.setdefault("auth_user_id", None)
     st.session_state.setdefault("auth_last_seen", None)
+    st.session_state.setdefault("auth_expires_at", None)
+    st.session_state.setdefault("auth_expired_notice", "")
     st.session_state.setdefault("selected_run_dir", None)
     st.session_state.setdefault("selected_run_question", "")
+    st.session_state.setdefault("loaded_run_dataset_path", None)
+    st.session_state.setdefault("ui_theme", "Dark")
+
+
+def _render_theme_picker(*, in_sidebar: bool) -> None:
+    current_theme = str(st.session_state.get("ui_theme", "Dark"))
+    if in_sidebar:
+        theme_choice = st.sidebar.radio(
+            "Theme",
+            ["Dark", "Light"],
+            index=0 if current_theme == "Dark" else 1,
+            horizontal=True,
+            key="theme_picker_sidebar",
+        )
+    else:
+        _, right_col = st.columns([0.76, 0.24], gap="small")
+        with right_col:
+            theme_choice = st.radio(
+                "Theme",
+                ["Dark", "Light"],
+                index=0 if current_theme == "Dark" else 1,
+                horizontal=True,
+                key="theme_picker_auth",
+            )
+    if theme_choice != current_theme:
+        st.session_state["ui_theme"] = theme_choice
+        st.rerun()
 
 
 def _clear_auth_session() -> None:
     st.session_state["auth_user_id"] = None
     st.session_state["auth_last_seen"] = None
+    st.session_state["auth_expires_at"] = None
     st.session_state["selected_run_dir"] = None
     st.session_state["selected_run_question"] = ""
+    st.session_state["loaded_run_dataset_path"] = None
 
 
 @st.cache_resource
@@ -449,15 +776,26 @@ def _current_user(auth: PostgresAuthStore):
         return None
 
     now = _utc_now()
-    last_seen_raw = st.session_state.get("auth_last_seen")
-    if last_seen_raw:
+    ttl = timedelta(minutes=int(auth_cfg.AUTH_SESSION_TTL_MIN))
+    expires_raw = st.session_state.get("auth_expires_at")
+    expires_at: datetime | None = None
+    if expires_raw:
         try:
-            last_seen = datetime.fromisoformat(last_seen_raw)
+            expires_at = datetime.fromisoformat(str(expires_raw))
         except Exception:
-            last_seen = now
-        if now - last_seen > timedelta(minutes=int(auth_cfg.AUTH_SESSION_TTL_MIN)):
-            _clear_auth_session()
-            return None
+            expires_at = None
+    if expires_at is None:
+        last_seen_raw = st.session_state.get("auth_last_seen")
+        try:
+            fallback_anchor = datetime.fromisoformat(str(last_seen_raw)) if last_seen_raw else now
+        except Exception:
+            fallback_anchor = now
+        expires_at = fallback_anchor + ttl
+        st.session_state["auth_expires_at"] = expires_at.isoformat()
+    if now >= expires_at:
+        _clear_auth_session()
+        st.session_state["auth_expired_notice"] = "Session expired. Please sign in again."
+        return None
 
     user = auth.get_user_by_id(int(user_id))
     if user is None:
@@ -472,14 +810,20 @@ def _render_auth_gate(auth: PostgresAuthStore):
     st.markdown(
         """
         <div class="auth-shell">
+          <p class="auth-kicker">Workspace Access</p>
           <h2 class="auth-title">Secure Workspace Access</h2>
           <p class="auth-note">Sign in or create an account to continue.</p>
+          <div class="auth-chip-row">
+            <span class="auth-chip">Protected sessions</span>
+            <span class="auth-chip">Tracked analysis runs</span>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    _, center_col, _ = st.columns([0.2, 1.0, 0.2], gap="small")
+    _, center_col, _ = st.columns([0.26, 0.48, 0.26], gap="small")
     with center_col:
+        st.caption("Use your workspace credentials to continue.")
         mode = st.radio(
             "Authentication Mode",
             ["Login", "Sign Up"],
@@ -499,7 +843,11 @@ def _render_auth_gate(auth: PostgresAuthStore):
                         st.error(msg)
                     else:
                         st.session_state["auth_user_id"] = user.id
-                        st.session_state["auth_last_seen"] = _utc_now().isoformat()
+                        now = _utc_now()
+                        ttl = timedelta(minutes=int(_get_auth_cfg().AUTH_SESSION_TTL_MIN))
+                        st.session_state["auth_last_seen"] = now.isoformat()
+                        st.session_state["auth_expires_at"] = (now + ttl).isoformat()
+                        st.session_state["auth_expired_notice"] = ""
                         st.success("Signed in.")
                         st.rerun()
         else:
@@ -624,7 +972,6 @@ def _render_workspace(user, run_store: RunTrackingStore) -> None:
     cfg = _get_app_cfg()
     auth_cfg = _get_auth_cfg()
     max_upload_mb = int(auth_cfg.MAX_UPLOAD_MB)
-    session_ttl_min = int(auth_cfg.AUTH_SESSION_TTL_MIN)
 
     st.markdown(
         """
@@ -638,57 +985,21 @@ def _render_workspace(user, run_store: RunTrackingStore) -> None:
 
     st.sidebar.markdown("### Workspace")
     st.sidebar.write(f"**Signed in:** {user.full_name}")
-    st.sidebar.caption(user.email)
-    st.sidebar.markdown(
-        f'<span class="mono">Session timeout: {session_ttl_min} minutes</span>',
-        unsafe_allow_html=True,
-    )
+    expires_raw = st.session_state.get("auth_expires_at")
+    if expires_raw:
+        try:
+            expires_at = datetime.fromisoformat(str(expires_raw))
+            remaining = expires_at - _utc_now()
+            if timedelta(0) < remaining <= timedelta(minutes=5):
+                remaining_minutes = max(1, int(remaining.total_seconds() // 60) + 1)
+                st.sidebar.warning(
+                    f"You will be logged out soon ({remaining_minutes} minute(s) remaining)."
+                )
+        except Exception:
+            pass
     if st.sidebar.button("Logout", width="stretch"):
         _clear_auth_session()
         st.rerun()
-
-    recent_runs = run_store.list_runs_for_user(user_id=int(user.id), limit=6)
-    if recent_runs:
-        def _short_question(run_obj, limit: int = 72) -> str:
-            q = str(run_obj.run_metadata.get("business_question", "")).strip()
-            if not q:
-                q = "Untitled question"
-            if len(q) <= limit:
-                return q
-            return q[: limit - 1].rstrip() + "…"
-
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### Recent Runs")
-        for rr in recent_runs:
-            st.sidebar.caption(
-                f"{_short_question(rr)} | {rr.status} | {rr.created_at[:19]}"
-            )
-        run_lookup = {
-            f"{_short_question(rr, 52)} | {rr.status} | {rr.created_at[:19]}": rr.run_uuid
-            for rr in recent_runs
-        }
-        selected = st.sidebar.selectbox(
-            "Open Previous Run",
-            options=[""] + list(run_lookup.keys()),
-            index=0,
-        )
-        if selected and st.sidebar.button("Load Selected Run", width="stretch"):
-            detail = run_store.get_run_details_for_user(
-                user_id=int(user.id),
-                run_uuid=run_lookup[selected],
-            )
-            if detail is None:
-                st.sidebar.error("Run not found.")
-            else:
-                run_dir = Path(str(detail.run.run_metadata.get("run_dir", "")))
-                if not run_dir.exists():
-                    st.sidebar.error("Run directory no longer exists on disk.")
-                else:
-                    st.session_state["selected_run_dir"] = str(run_dir)
-                    st.session_state["selected_run_question"] = str(
-                        detail.run.run_metadata.get("business_question", "")
-                    )
-                    st.rerun()
 
     st.sidebar.markdown("---")
     source_type = st.sidebar.radio("Data source", ["CSV", "SQL"], index=0, horizontal=True)
@@ -717,9 +1028,67 @@ def _render_workspace(user, run_store: RunTrackingStore) -> None:
     )
     run_btn = st.sidebar.button("Run Analysis", type="primary", width="stretch")
 
+    recent_runs = run_store.list_runs_for_user(user_id=int(user.id), limit=6)
+    if recent_runs:
+        def _short_question(run_obj, limit: int = 72) -> str:
+            q = str(run_obj.run_metadata.get("business_question", "")).strip()
+            if not q:
+                q = "Untitled question"
+            if len(q) <= limit:
+                return q
+            return q[: limit - 1].rstrip() + "…"
+
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### Recent Runs")
+        run_lookup = {rr.run_uuid: rr for rr in recent_runs}
+        selected_uuid = st.sidebar.selectbox(
+            "Open Previous Run",
+            options=[""] + list(run_lookup.keys()),
+            format_func=lambda run_uuid: (
+                ""
+                if not run_uuid
+                else _short_question(run_lookup[run_uuid], limit=72)
+            ),
+            index=0,
+        )
+        if selected_uuid and st.sidebar.button("Load Selected Run", width="stretch"):
+            detail = run_store.get_run_details_for_user(
+                user_id=int(user.id),
+                run_uuid=selected_uuid,
+            )
+            if detail is None:
+                st.sidebar.error("Run not found.")
+            else:
+                run_dir = Path(str(detail.run.run_metadata.get("run_dir", "")))
+                if not run_dir.exists():
+                    st.sidebar.error("Run directory no longer exists on disk.")
+                else:
+                    st.session_state["selected_run_dir"] = str(run_dir)
+                    st.session_state["selected_run_question"] = str(
+                        detail.run.run_metadata.get("business_question", "")
+                    )
+                    loaded_csv = run_dir / "cleaned.csv"
+                    st.session_state["loaded_run_dataset_path"] = (
+                        str(loaded_csv) if loaded_csv.exists() else None
+                    )
+                    st.rerun()
+
     left, right = st.columns([1.15, 1.0], gap="large")
     with left:
         st.subheader("Source Preview")
+        loaded_run_dataset_path = st.session_state.get("loaded_run_dataset_path")
+        if loaded_run_dataset_path:
+            loaded_path = Path(str(loaded_run_dataset_path))
+            if loaded_path.exists():
+                st.caption(f"Loaded from previous run dataset: {loaded_path.name}")
+                try:
+                    loaded_df = pd.read_csv(loaded_path)
+                    st.dataframe(loaded_df.head(20), width="stretch")
+                except Exception as e:
+                    st.warning(f"Could not preview loaded run dataset: {sanitize_user_error_message(e)}")
+            else:
+                st.session_state["loaded_run_dataset_path"] = None
+
         if source_type == "CSV":
             if uploaded is not None:
                 size_mb = uploaded.size / (1024 * 1024)
@@ -774,6 +1143,7 @@ def _render_workspace(user, run_store: RunTrackingStore) -> None:
             st.error("Please enter a business question.")
             st.stop()
 
+        st.session_state["loaded_run_dataset_path"] = None
         try:
             run_metadata = {
                 "business_question": question.strip(),
@@ -840,7 +1210,8 @@ def _render_workspace(user, run_store: RunTrackingStore) -> None:
     elif selected_run_dir:
         run_path = Path(str(selected_run_dir))
         if run_path.exists():
-            st.info(f"Showing previous run: {run_path.name}")
+            label_question = str(selected_run_question).strip() or run_path.name
+            st.info(f'Showing results for "{label_question}"')
             _render_results(run_path, str(selected_run_question))
         else:
             st.warning("Selected run folder no longer exists.")
@@ -849,8 +1220,8 @@ def _render_workspace(user, run_store: RunTrackingStore) -> None:
 
 
 def main() -> None:
-    _inject_styles()
     _init_session_state()
+    _inject_styles(theme=str(st.session_state.get("ui_theme", "Dark")).lower())
 
     try:
         auth = _get_auth_store()
@@ -864,8 +1235,14 @@ def main() -> None:
         return
     user = _current_user(auth)
     if user is None:
+        _render_theme_picker(in_sidebar=False)
+        expired_notice = str(st.session_state.get("auth_expired_notice", "")).strip()
+        if expired_notice:
+            st.warning(expired_notice)
+            st.session_state["auth_expired_notice"] = ""
         _render_auth_gate(auth)
         return
+    _render_theme_picker(in_sidebar=True)
     _render_workspace(user, run_store)
 
 
