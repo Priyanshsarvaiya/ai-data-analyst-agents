@@ -28,7 +28,7 @@ Optional auth hardening env vars:
 
 Postgres auth DB connection (used by Streamlit login/signup):
 
-`export AUTH_DATABASE_URL="postgresql+psycopg://ai_analyst_app:change-this-strong-password@localhost:5432/ai_analyst"`
+`export AUTH_DATABASE_URL="postgresql+psycopg://your_db_user:your_db_password@localhost:5432/your_db_name"`
 
 ## 3) Run CSV Pipeline
 
