@@ -7,6 +7,7 @@ import pandas as pd
 from ai_data_analyst_agents.statistics.assumptions import check_normality
 from ai_data_analyst_agents.statistics.hypothesis_tests import (
     chi_square_independence_test,
+    fisher_exact_test,
     mann_whitney_u_test,
     paired_t_test,
     two_proportion_z_test,
@@ -31,7 +32,7 @@ def _is_binary_metric(series: pd.Series, *, metric_name: str, success_value: Any
     if clean.empty:
         return False
     unique_vals = set(clean.unique().tolist())
-    if unique_vals.issubset({0, 1, True, False, success_value}):
+    if unique_vals.issubset({0, 1, success_value}):
         return True
     return metric_name.lower() in BINARY_TOKENS
 
@@ -87,7 +88,24 @@ def select_hypothesis_method(df: pd.DataFrame, request: HypothesisTestRequest) -
             reason="Pairing was explicitly requested.",
         )
 
-    if _is_binary_metric(metric_series, metric_name=request.metric, success_value=request.success_value):
+    binary_metric = request.metric_type == "binary" or (
+        request.metric_type == "auto"
+        and _is_binary_metric(metric_series, metric_name=request.metric, success_value=request.success_value)
+    )
+    if binary_metric:
+        a, b, _, _ = prepare_two_groups(df, request)
+        a_clean = a.dropna()
+        b_clean = b.dropna()
+        success_a = int((a_clean == request.success_value).sum())
+        success_b = int((b_clean == request.success_value).sum())
+        cells = [success_a, len(a_clean) - success_a, success_b, len(b_clean) - success_b]
+        if min(cells, default=0) < 5:
+            return StatisticalSelection(
+                analysis_type="hypothesis_test",
+                method="fisher_exact_test",
+                reason="Sparse binary success/failure counts require an exact 2x2 test.",
+                fallback_used=True,
+            )
         return StatisticalSelection(
             analysis_type="hypothesis_test",
             method="two_proportion_z_test",
@@ -95,7 +113,14 @@ def select_hypothesis_method(df: pd.DataFrame, request: HypothesisTestRequest) -
         )
 
     numeric = pd.to_numeric(metric_series, errors="coerce")
-    if numeric.notna().sum() >= max(3, int(metric_series.notna().sum() * 0.6)):
+    if request.metric_type == "categorical":
+        numeric = pd.Series(index=metric_series.index, dtype=float)
+    numeric_required = max(3, int(metric_series.notna().sum() * 0.6))
+    if request.metric_type == "continuous" and numeric.notna().sum() < numeric_required:
+        raise ValueError(
+            f"Metric '{request.metric}' was declared continuous but fewer than 60% of non-null values are numeric."
+        )
+    if numeric.notna().sum() >= numeric_required:
         a, b, label_a, label_b = prepare_two_groups(df, request)
         normal_a = check_normality(pd.to_numeric(a, errors="coerce").dropna(), alpha=request.alpha, label=label_a)
         normal_b = check_normality(pd.to_numeric(b, errors="coerce").dropna(), alpha=request.alpha, label=label_b)
@@ -177,6 +202,19 @@ def run_hypothesis_test(df: pd.DataFrame, request: HypothesisTestRequest, *, ana
             metric=request.metric,
             success_value=request.success_value,
             alpha=request.alpha,
+            alternative=request.alternative,
+        )
+    if selection.method == "fisher_exact_test":
+        return selection, fisher_exact_test(
+            analysis_id=analysis_id,
+            group_a=group_a,
+            group_b=group_b,
+            label_a=label_a,
+            label_b=label_b,
+            metric=request.metric,
+            success_value=request.success_value,
+            alpha=request.alpha,
+            alternative=request.alternative,
         )
     if selection.method == "mann_whitney_u":
         return selection, mann_whitney_u_test(

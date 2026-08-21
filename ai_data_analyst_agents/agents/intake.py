@@ -13,6 +13,7 @@ from ai_data_analyst_agents.core.contracts import (
 from ai_data_analyst_agents.core.kpi_templates import (
     default_agg_for_metric,
     detect_business_domain,
+    score_business_domains,
 )
 
 
@@ -279,6 +280,7 @@ class IntakeAgent(Agent):
         source = ctx.get("source", {"type": "csv"})
         schema_cols = [str(c) for c in df.columns]
         domain = detect_business_domain(question, schema_cols)
+        domain_candidates = score_business_domains(question, schema_cols)[:3]
 
         numeric_cols = _infer_numeric_cols(df)
         time_cols = _infer_time_cols(df)
@@ -329,6 +331,7 @@ class IntakeAgent(Agent):
             "business_question": question,
             "source_type": source.get("type", "csv"),
             "suggested_domain": domain,
+            "domain_candidates": domain_candidates,
             "analysis_type": analysis_type,
             "routing_reason": routing_reason,
             "routing_confidence": routing_confidence,

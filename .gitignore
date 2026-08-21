@@ -50,6 +50,7 @@ artifacts/*
 # Charts & generated outputs
 **/charts/
 *.png
+!docs/assets/ai-data-analyst-agents-hero.png
 *.jpg
 *.jpeg
 *.svg
@@ -97,3 +98,4 @@ poetry.lock
 
 skills.md
 .ruff_cache
+runcom.md

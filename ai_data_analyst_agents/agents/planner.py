@@ -14,6 +14,7 @@ from ai_data_analyst_agents.core.kpi_templates import (
     detect_business_domain,
     is_agg_allowed_for_metric,
     pick_cohort_columns,
+    score_business_domains,
 )
 from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
 from ai_data_analyst_agents.core.security import validate_read_only_sql
@@ -38,7 +39,7 @@ JSON OUTPUT SCHEMA
   "tasks": [
     {
       "id": "T1",
-      "type": "groupby_agg" | "groupby2_agg" | "filter_agg" | "correlation" | "distribution" | "group_distribution" | "recency_by_group" | "topk" | "timeseries_agg" | "sql_query" | "sql_join_profile" | "kpi_template_apply" | "metric_definition" | "segment_analysis" | "cohort_analysis" | "statistical_test" | "ab_test" | "ols_regression",
+      "type": "groupby_agg" | "groupby2_agg" | "filter_agg" | "correlation" | "distribution" | "group_distribution" | "recency_by_group" | "topk" | "timeseries_agg" | "sql_query" | "sql_join_profile" | "kpi_template_apply" | "metric_definition" | "segment_analysis" | "gap_decomposition" | "cohort_analysis" | "statistical_test" | "ab_test" | "ols_regression",
       "params": {}
     }
   ],
@@ -62,12 +63,14 @@ TASK PARAM SCHEMAS
 14) segment_analysis: {segment_by, metric, agg?, limit?}
 15) cohort_analysis: {entity_col, date_col, freq?}
 16) statistical_test: {group_col, metric, group_a?, group_b?, compare_to_rest?, paired?, pair_id_col?, success_value?, alpha?, alternative?}
-17) ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?}
+17) ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?, alternative?}
 18) ols_regression: {target, predictors, alpha?}
+19) gap_decomposition: {segment_by, metric, focus_segment?}
 
 HEURISTICS
 - Always include direct answer tasks first.
-- For "why/driver/difference": include contrast + volume + average + mix + driver checks.
+- For "why/driver/difference": always include gap_decomposition. Treat correlations and segment contrasts as associations, never as causal proof.
+- Prefer the smallest set of non-duplicate tasks that closes the question's required capabilities.
 - For SQL multi-table schemas: include schema-aware sql_query and join-profile tasks when relevant columns are in different tables.
 - For business context: include kpi_template_apply for best-fit domain and add segment/cohort tasks if question implies segmentation or retention.
 
@@ -139,6 +142,7 @@ ALLOWED_TASK_TYPES = {
     "kpi_template_apply",
     "metric_definition",
     "segment_analysis",
+    "gap_decomposition",
     "cohort_analysis",
     "statistical_test",
     "ab_test",
@@ -199,6 +203,7 @@ ALLOWED_TASKS_BY_ANALYSIS_TYPE: Dict[str, set[str]] = {
         "timeseries_agg",
         "kpi_template_apply",
         "segment_analysis",
+        "gap_decomposition",
         "metric_definition",
         "statistical_test",
         "ols_regression",
@@ -236,7 +241,7 @@ MANDATORY_TASK_TYPES_BY_ANALYSIS_TYPE: Dict[str, set[str]] = {
     "descriptive": {"kpi_template_apply", "distribution"},
     "trend": {"kpi_template_apply", "timeseries_agg"},
     "segment_comparison": {"kpi_template_apply", "groupby_agg", "segment_analysis"},
-    "diagnostic": {"kpi_template_apply", "groupby_agg", "segment_analysis"},
+    "diagnostic": {"kpi_template_apply", "groupby_agg", "segment_analysis", "gap_decomposition"},
     "experiment_ab": {"kpi_template_apply", "ab_test"},
     "forecasting_unsupported": {"kpi_template_apply", "timeseries_agg"},
     "impossible": {"kpi_template_apply"},
@@ -672,6 +677,13 @@ def _route_seed_tasks(planning_contract: Dict[str, Any], business_domain: str) -
         seeded.append({"type": "timeseries_agg", "params": {"date_col": time_col, "metric": metric, "freq": "M", "agg": agg}})
     if analysis_type == "segment_comparison" and segments and metric:
         seeded.append({"type": "groupby_agg", "params": {"group_by": segments[0], "metric": metric, "agg": agg, "limit": 1000}})
+    if analysis_type == "diagnostic" and segments and metric:
+        seeded.append(
+            {
+                "type": "gap_decomposition",
+                "params": {"segment_by": segments[0], "metric": metric},
+            }
+        )
     if analysis_type == "experiment_ab" and group_col and metric:
         seeded.append(
             {
@@ -836,6 +848,12 @@ def _sanitize_and_number_tasks(
             p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("limit", 100)
 
+        elif ttype == "gap_decomposition":
+            if p.get("segment_by") not in schema_cols or p.get("metric") not in numeric_cols:
+                continue
+            if p.get("focus_segment") is not None:
+                p["focus_segment"] = str(p["focus_segment"])
+
         elif ttype == "cohort_analysis":
             if p.get("entity_col") not in schema_cols:
                 continue
@@ -864,6 +882,7 @@ def _sanitize_and_number_tasks(
                 continue
             p.setdefault("metric_type", "auto")
             p.setdefault("alpha", 0.05)
+            p.setdefault("alternative", "two-sided")
 
         elif ttype == "ols_regression":
             if p.get("target") not in numeric_cols:
@@ -1276,7 +1295,10 @@ def _merge_task_lists(first: List[Dict[str, Any]], second: List[Dict[str, Any]])
 def _task_semantic_key(task: Dict[str, Any]) -> str:
     ttype = str(task.get("type", "")).strip()
     params = dict(task.get("params", {}) or {})
-    core = {"type": ttype, "params": dict(sorted(params.items(), key=lambda kv: kv[0]))}
+    # Row/display limits do not change the analytical question. Ignoring them here
+    # prevents the seed, heuristic, and LLM planners from scheduling duplicates.
+    semantic_params = {k: v for k, v in params.items() if k not in {"limit", "k"}}
+    core = {"type": ttype, "params": dict(sorted(semantic_params.items(), key=lambda kv: kv[0]))}
     return json.dumps(core, sort_keys=True, ensure_ascii=False)
 
 
@@ -1404,6 +1426,7 @@ class PlannerAgent(Agent):
         main_metric = count_metric if count_intent and count_metric else metric_hint
         main_agg = "count" if count_intent and count_metric else default_agg_for_metric(str(main_metric or "metric"))
         business_domain = detect_business_domain(question, schema_cols)
+        domain_candidates = score_business_domains(question, schema_cols)[:3]
 
         intake_analysis_type = str(intake_plan.get("analysis_type", "")).strip()
         intake_blocked = intake_plan.get("blocked_requirements")
@@ -1466,13 +1489,17 @@ class PlannerAgent(Agent):
             "schema": {"columns": schema_cols, "dtypes": schema_dtypes},
             "source": ctx.get("source", {"type": "csv"}),
             "suggested_domain": business_domain,
+            "domain_candidates": domain_candidates,
             "analysis_type": analysis_type,
             "planning_contract": planning_contract,
             "sql_schema": sql_schema if isinstance(sql_schema, dict) else None,
         }
 
+        planner_token_budget = int(getattr(cfg.llm, "planner_max_tokens", cfg.llm.max_tokens))
+        client = None
         try:
             client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
+            client.max_attempts = int(getattr(cfg.llm, "max_attempts", getattr(client, "max_attempts", 4)))
             logger.info("[Planner] Calling OpenRouter for task plan...")
             raw = client.chat(
                 model=cfg.llm.model,
@@ -1481,10 +1508,21 @@ class PlannerAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, indent=2)},
                 ],
                 temperature=0.0,
-                max_tokens=max(1200, min(cfg.llm.max_tokens, 4096)),
+                max_tokens=planner_token_budget,
             )
         except Exception as e:
             logger.warning(f"[Planner] OpenRouter call failed: {e}. Continuing with deterministic plan.")
+
+        store.write_json(
+            "planner_llm_metadata.json",
+            {
+                "model": cfg.llm.model,
+                "max_output_tokens": planner_token_budget,
+                "finish_reason": getattr(client, "last_finish_reason", None),
+                "usage": getattr(client, "last_usage", {}),
+                "response_received": bool(raw and raw.strip()),
+            },
+        )
 
         store.write_text("planner_raw.txt", raw or "")
 

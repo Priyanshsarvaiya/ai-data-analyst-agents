@@ -18,22 +18,24 @@ NON-NEGOTIABLE RULES
 - Use ONLY the provided artifacts context.
 - Do NOT invent metrics, numbers, columns, entities, or trends not present in the context.
 - Every numeric value or concrete claim MUST include an evidence tag like [[EV:EV-xxxxxxxxxx]].
-- If you cannot support a claim with evidence, write EXACTLY: "Not computed in artifacts."
+- If a computation required to answer the question is absent, say it was not computed and name the missing capability. This is a valid limitation even when no scheduled task failed.
 - For statistical results, never use causal wording unless the study design explicitly justifies it in artifacts.
 - Do not call a result significant without including p-value context plus confidence interval/effect-size support.
 - Prefer computed metric artifacts (metrics_outputs.json, *_filter_*.json, *_groupby_*.json, *_corr_*.json) over descriptive summaries.
 - Use `evidence_payloads` values directly whenever available; do not claim values are missing if payloads contain them.
 - Do not include generic boilerplate. Every sentence must either (a) answer the business question, or (b) justify limitations/next steps.
-- Limitations must only include truly missing computations required for the asked question. If required computations exist, state that clearly instead of generic caveats.
+- Use `analysis_readiness` as the authority for required capabilities and coverage gaps.
+- Distinguish observed contributors from causes. Correlation, rankings, and segment contrasts do not establish causality.
+- Never call something a "leading driver" or "mix effect" unless a cited decomposition or justified model quantifies that contribution.
 - Next steps must be question-specific and conditional on actual remaining gaps (do not include generic placeholder steps).
 
 GOAL
 - Directly answer the business question: "{business_question}"
 - If the question is a "why/driver" question, you MUST summarize drivers using evidence:
-  - compare across segments (e.g., country/category)
-  - reference distributions/quantiles if available
-  - reference correlations if available
-  - if none computed, clearly state what is missing and what needs to be computed.
+  - lead with a cited gap decomposition when available
+  - use segment contrasts, distributions, and correlations only as supporting associations
+  - reconcile contribution effects to the observed gap
+  - if decomposition is absent, explicitly label the answer partial.
 
 REPORT FORMAT (STRICT)
 Produce exactly these sections in this order:
@@ -49,7 +51,7 @@ Produce exactly these sections in this order:
 - Provide a short, direct answer paragraph.
 - Then include a compact bullet list of the key evidence items (each bullet must include an evidence tag).
 - If the question is about a total/aggregation, show the computed value(s).
-- If the question is about "why", list the top 2–5 quantitative drivers/contrasts (e.g., top segments, strongest correlations).
+- If the question is about "why", list quantified contribution effects first, then supporting contrasts/associations.
 
 ## 3) Dataset Overview
 - Rows, columns, and key fields relevant to the question (do NOT list every column unless needed).
@@ -498,6 +500,7 @@ def _build_deterministic_report(
         for e in entries
         if isinstance(e.get("payload"), dict)
         and len(e["payload"]) >= 2
+        and e["payload"].get("analysis_type") not in {"gap_decomposition", "hypothesis_test", "ab_test", "regression"}
         and sum(isinstance(v, (int, float)) for v in e["payload"].values()) >= 2
         and e.get("ev_id")
     ]
@@ -559,6 +562,16 @@ def _build_deterministic_report(
         ),
         None,
     )
+    decomposition_entry = next(
+        (
+            e
+            for e in entries
+            if isinstance(e.get("payload"), dict)
+            and e["payload"].get("analysis_type") == "gap_decomposition"
+            and e.get("ev_id")
+        ),
+        None,
+    )
 
     focus_dim = None
     focus_key = None
@@ -598,7 +611,16 @@ def _build_deterministic_report(
                 focus_rank = i
                 break
 
+    grouped_ev_id = grouped_entry.get("ev_id") if isinstance(grouped_entry, dict) else None
     exec_bullets = [f"- Business question: {business_question}"]
+    if decomposition_entry:
+        dec = decomposition_entry["payload"]
+        effects = dec.get("effects", {}) or {}
+        exec_bullets.append(
+            f"- The observed {dec.get('metric')} gap is {float(dec.get('absolute_gap', 0)):,.2f}; "
+            f"row volume contributes {float(effects.get('row_volume_effect', 0)):,.2f} and average value contributes "
+            f"{float(effects.get('average_value_effect', 0)):,.2f} {_tag(decomposition_entry.get('ev_id'))}."
+        )
     if focus_key is not None and focus_value is not None and ranked_items:
         top_name, top_val = top_item
         exec_bullets.append(
@@ -607,15 +629,27 @@ def _build_deterministic_report(
         )
         exec_bullets.append(
             f"- Top {focus_dim or 'segment'} is {top_name} at {top_val:,.2f}; gap is {top_val - focus_value:,.2f} "
-            f"{_tag(grouped_entry.get('ev_id'))}".strip()
+            f"{_tag(grouped_ev_id)}".strip()
         )
     elif grouped_entry and ranked_items:
         preview = ", ".join([f"{k} ({v:,.2f})" for k, v in ranked_items[:5]])
-        exec_bullets.append(f"- Main grouped results: {preview} {_tag(grouped_entry.get('ev_id'))}")
+        exec_bullets.append(f"- Main grouped results: {preview} {_tag(grouped_ev_id)}")
     else:
         exec_bullets.append("- Quantitative metrics were computed and are listed below.")
 
     answer_lines = []
+    if decomposition_entry:
+        dec = decomposition_entry["payload"]
+        effects = dec.get("effects", {}) or {}
+        answer_lines.append(
+            "Observed gap decomposition: "
+            f"{dec.get('focus_segment')} {dec.get('focus_relationship', 'differs from')} "
+            f"{dec.get('benchmark_segment')} by {abs(float(dec.get('absolute_gap', 0))):,.2f}; "
+            "the row-volume effect is "
+            f"{float(effects.get('row_volume_effect', 0)):,.2f} and the average-value effect is "
+            f"{float(effects.get('average_value_effect', 0)):,.2f} "
+            f"{_tag(decomposition_entry.get('ev_id'))}. These are arithmetic contributions, not causal claims."
+        )
     if focus_key is not None and focus_value is not None and ranked_items:
         answer_lines.append(
             f"Direct answer: {focus_key} = {focus_value:,.2f}, rank {focus_rank}/{len(ranked_items)} in the main comparison "
@@ -627,20 +661,20 @@ def _build_deterministic_report(
             second_name, second_val = ranked_items[1]
             answer_lines.append(
                 f"Direct answer: {top_name} is highest at {top_val:,.2f}, leading {second_name} by {top_val - second_val:,.2f} "
-                f"{_tag(grouped_entry.get('ev_id'))}."
+                f"{_tag(grouped_ev_id)}."
             )
         else:
-            answer_lines.append(f"Direct answer: {top_name} is highest at {top_val:,.2f} {_tag(grouped_entry.get('ev_id'))}.")
+            answer_lines.append(f"Direct answer: {top_name} is highest at {top_val:,.2f} {_tag(grouped_ev_id)}.")
     elif ranked_items and _has_kw(["lowest", "least", "smallest"]):
         low_name, low_val = ranked_items[-1]
         if len(ranked_items) > 1:
             prev_name, prev_val = ranked_items[-2]
             answer_lines.append(
                 f"Direct answer: {low_name} is lowest at {low_val:,.2f}, trailing {prev_name} by {prev_val - low_val:,.2f} "
-                f"{_tag(grouped_entry.get('ev_id'))}."
+                f"{_tag(grouped_ev_id)}."
             )
         else:
-            answer_lines.append(f"Direct answer: {low_name} is lowest at {low_val:,.2f} {_tag(grouped_entry.get('ev_id'))}.")
+            answer_lines.append(f"Direct answer: {low_name} is lowest at {low_val:,.2f} {_tag(grouped_ev_id)}.")
     else:
         answer_lines.append("Direct answer: see computed evidence list; no single filtered target was explicitly requested.")
 
@@ -708,6 +742,8 @@ def _build_deterministic_report(
         if not any("_recency_customer_id_" in a for a in artifact_names):
             limitations.append("- Customer recency metrics were not computed.")
     if _has_kw(["why", "driver", "cause", "reason"]):
+        if not decomposition_entry:
+            limitations.append("- A quantified gap decomposition was not computed, so the diagnostic answer is partial.")
         if not any("_groupby2_" in a for a in artifact_names):
             limitations.append("- Cross-segment mix analysis (2D groupby) is missing.")
         if not any("_corr_" in a for a in artifact_names):
@@ -745,6 +781,8 @@ def _build_deterministic_report(
                 next_steps.append("- Compute 2D mix table for primary segments to identify composition effects.")
             elif "Correlation-based driver checks" in lim:
                 next_steps.append("- Compute correlations between key numeric drivers and the target metric.")
+            elif "quantified gap decomposition" in lim:
+                next_steps.append("- Decompose the observed gap into row-volume and average-value effects.")
             elif "Time-series aggregation" in lim:
                 next_steps.append("- Add time-series aggregation to evaluate trend stability and seasonality.")
     else:
@@ -854,6 +892,8 @@ class ReportingAgent(Agent):
         profile = ctx["memory"].get("result.profiling")
         qa = ctx["memory"].get("result.quality")
         eda = ctx["memory"].get("result.eda")
+        analysis_readiness = ctx["memory"].get("result.insights") or {}
+        review_feedback = ctx["memory"].get("review.feedback") or {}
         source = ctx.get("source", {"type": "csv"})
         sql_schema = ctx.get("sql_schema") if isinstance(ctx.get("sql_schema"), dict) else None
 
@@ -930,11 +970,13 @@ class ReportingAgent(Agent):
             "sql_schema": sql_schema,
             "quality_report": qa,
             "eda_summary": eda,
+            "analysis_readiness": analysis_readiness,
             "planner_output": planner_out,        # includes tasks list
             "metrics_outputs": metrics_out,       # includes computed/failed/skipped
             "evidence_map": evidence_map,
             "evidence_payloads": evidence_payloads,
             "computed_facts": computed_facts,
+            "prior_review_feedback": review_feedback,
         }
 
         # Inject the business question into the system prompt (safer than relying on user msg)
@@ -949,6 +991,7 @@ class ReportingAgent(Agent):
                     "Generate the report now. Answer the business question first, "
                     "then support with evidence tags. Use evidence_payloads and computed_facts for numeric values. "
                     "If metrics_outputs.computed is non-empty, include at least one concrete numeric answer in sections 1 and 2."
+                    " If prior_review_feedback is present, correct every listed report violation without inventing evidence."
                 ),
             },
             {"role": "user", "content": "Artifacts Context (JSON):\n" + json.dumps(artifacts_context, indent=2)},
@@ -957,16 +1000,29 @@ class ReportingAgent(Agent):
         logger.info("[OpenRouter] Calling LLM for report generation...")
         report_md = ""
         used_fallback = False
+        report_token_budget = int(getattr(cfg.llm, "report_max_tokens", cfg.llm.max_tokens))
+        client = None
         try:
             client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
+            client.max_attempts = int(getattr(cfg.llm, "max_attempts", getattr(client, "max_attempts", 4)))
             report_md = client.chat(
                 model=cfg.llm.model,
                 messages=messages,
                 temperature=cfg.llm.temperature,
-                max_tokens=cfg.llm.max_tokens,
+                max_tokens=report_token_budget,
             )
         except Exception as e:
             logger.warning(f"[Reporting] OpenRouter call failed: {e}. Falling back to deterministic report.")
+        store.write_json(
+            "report_llm_metadata.json",
+            {
+                "model": cfg.llm.model,
+                "max_output_tokens": report_token_budget,
+                "finish_reason": getattr(client, "last_finish_reason", None),
+                "usage": getattr(client, "last_usage", {}),
+                "response_received": bool(report_md and report_md.strip()),
+            },
+        )
         report_md = _normalize_evidence_tags(report_md or "")
         if not any(
             isinstance(ev.get("payload"), dict) and ev.get("payload", {}).get("analysis_type") in {"hypothesis_test", "ab_test", "regression"}

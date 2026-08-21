@@ -51,7 +51,14 @@ def test_quality_report_flags_core_issues() -> None:
         outlier_z_threshold=4.0,
     )
 
-    assert set(report.keys()) == {"missingness", "duplicate_rate", "outliers_zscore", "warnings"}
+    assert set(report.keys()) == {
+        "missingness",
+        "duplicate_rate",
+        "outliers_zscore",
+        "constant_columns",
+        "identifier_integrity",
+        "warnings",
+    }
     assert report["missingness"]["mostly_missing"] > 0.2
     assert report["duplicate_rate"] > 0.01
     assert "metric" in report["outliers_zscore"]["columns"]

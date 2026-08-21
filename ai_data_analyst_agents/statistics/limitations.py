@@ -15,5 +15,12 @@ def build_statistical_limitations(result: StatisticalResult) -> list[str]:
         if limit not in lines:
             lines.append(limit)
     if not lines:
-        lines.append("No major statistical caveats were triggered beyond standard observational limitations.")
+        if result.analysis_type == "ab_test":
+            lines.append(
+                "Causal interpretation depends on randomized assignment, no interference, and valid exposure measurement."
+            )
+        elif result.analysis_type == "regression":
+            lines.append("Regression estimates conditional associations and does not establish causality.")
+        else:
+            lines.append("Observed group differences may reflect confounding and do not establish causality.")
     return lines[:8]

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import math
+from typing import cast
 
 import pandas as pd
 
 from ai_data_analyst_agents.statistics.models import EffectSize
+
+
+def _numeric_clean(series: pd.Series) -> pd.Series:
+    return cast(pd.Series, pd.to_numeric(series, errors="coerce")).dropna()
 
 
 def _interpret_cohens_d(value: float) -> str:
@@ -19,8 +24,8 @@ def _interpret_cohens_d(value: float) -> str:
 
 
 def cohens_d(group_a: pd.Series, group_b: pd.Series) -> EffectSize:
-    a = pd.to_numeric(group_a, errors="coerce").dropna()
-    b = pd.to_numeric(group_b, errors="coerce").dropna()
+    a = _numeric_clean(group_a)
+    b = _numeric_clean(group_b)
     n_a = int(a.shape[0])
     n_b = int(b.shape[0])
     if n_a < 2 or n_b < 2:
@@ -35,6 +40,29 @@ def cohens_d(group_a: pd.Series, group_b: pd.Series) -> EffectSize:
         value=value,
         interpretation=_interpret_cohens_d(value),
         caveat="Magnitude thresholds are heuristic and context-dependent.",
+    )
+
+
+def cohens_dz(differences: pd.Series) -> EffectSize:
+    clean = _numeric_clean(differences)
+    sd = float(clean.std(ddof=1)) if clean.shape[0] > 1 else 0.0
+    value = 0.0 if sd <= 1e-12 else float(clean.mean() / sd)
+    return EffectSize(
+        name="cohens_dz",
+        value=value,
+        interpretation=_interpret_cohens_d(value),
+        caveat="Paired standardized effect; magnitude thresholds are heuristic and context-dependent.",
+    )
+
+
+def rank_biserial_from_u(u_statistic: float, n_a: int, n_b: int) -> EffectSize:
+    denom = n_a * n_b
+    value = 0.0 if denom <= 0 else float((2.0 * u_statistic / denom) - 1.0)
+    return EffectSize(
+        name="rank_biserial_correlation",
+        value=value,
+        interpretation=("negligible" if abs(value) < 0.1 else "small" if abs(value) < 0.3 else "moderate" if abs(value) < 0.5 else "large"),
+        caveat="Signed nonparametric effect; direction follows group A relative to group B.",
     )
 
 

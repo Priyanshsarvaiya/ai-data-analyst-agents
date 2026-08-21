@@ -10,6 +10,7 @@ from ai_data_analyst_agents.agents.eda import EDAAgent
 from ai_data_analyst_agents.agents.intake import IntakeAgent
 from ai_data_analyst_agents.agents.metrics import MetricsAgent
 from ai_data_analyst_agents.agents.next_steps import NextStepsAgent
+from ai_data_analyst_agents.agents.insights import InsightsAgent
 from ai_data_analyst_agents.agents.planner import PlannerAgent
 from ai_data_analyst_agents.agents.profiling import ProfilingAgent
 from ai_data_analyst_agents.agents.quality import QualityAgent
@@ -97,6 +98,7 @@ def run_pipeline(
         "metrics": MetricsAgent(),
         "next_steps": NextStepsAgent(),
         "eda": EDAAgent(),
+        "insights": InsightsAgent(),
         "reporting": ReportingAgent(),
         "reviewer": ReviewerAgent(),
         "scorecard": ScorecardAgent(),
@@ -108,6 +110,7 @@ def run_pipeline(
     try:
         orch.run(tasks, ctx)
     except Exception:
+        store.write_json("shared_memory_audit.json", memory.audit())
         store.write_json(
             "agent_messages.json",
             [asdict(m) if hasattr(m, "__dataclass_fields__") else {"value": str(m)} for m in memory.messages],
@@ -153,6 +156,7 @@ def run_pipeline(
         "agent_messages.json",
         [asdict(m) if hasattr(m, "__dataclass_fields__") else {"value": str(m)} for m in memory.messages],
     )
+    store.write_json("shared_memory_audit.json", memory.audit())
     logger.info("Done.")
     return store.run_dir
 

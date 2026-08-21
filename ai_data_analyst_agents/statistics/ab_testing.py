@@ -16,6 +16,8 @@ def run_ab_test(df: pd.DataFrame, request: ABTestRequest, *, analysis_id: str) -
         group_b=request.control,
         success_value=request.success_value,
         alpha=request.alpha,
+        metric_type=request.metric_type,
+        alternative=request.alternative,
     )
     selection, result = run_hypothesis_test(df, base_request, analysis_id=analysis_id)
 
@@ -29,18 +31,20 @@ def run_ab_test(df: pd.DataFrame, request: ABTestRequest, *, analysis_id: str) -
     if not treatment_numeric.empty and not control_numeric.empty:
         treat_mean = float(treatment_numeric.mean())
         control_mean = float(control_numeric.mean())
-        result.effect_sizes.append(relative_lift(treat_mean, control_mean))
+        if not any(effect.name == "relative_lift" for effect in result.effect_sizes):
+            result.effect_sizes.append(relative_lift(treat_mean, control_mean))
         result.effect_sizes.append(percent_change(treat_mean, control_mean))
         result.metrics["treatment_mean"] = treat_mean
         result.metrics["control_mean"] = control_mean
         result.metrics["absolute_difference"] = treat_mean - control_mean
 
     min_n = min(int(treatment.shape[0]), int(control.shape[0]))
-    if selection.method == "two_proportion_z_test" and min_n < 100:
+    binary_method = selection.method in {"two_proportion_z_test", "fisher_exact_test"}
+    if binary_method and min_n < 100:
         result.warnings.append(
             f"A/B test may be underpowered for a binary metric because one or both groups have fewer than 100 observations (min_n={min_n})."
         )
-    elif selection.method != "two_proportion_z_test" and min_n < 30:
+    elif not binary_method and min_n < 30:
         result.warnings.append(
             f"A/B test may be underpowered for a continuous metric because one or both groups have fewer than 30 observations (min_n={min_n})."
         )

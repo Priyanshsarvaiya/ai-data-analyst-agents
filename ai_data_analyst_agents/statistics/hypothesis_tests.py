@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from scipy import stats
 
@@ -19,18 +20,31 @@ from ai_data_analyst_agents.statistics.assumptions import (
     to_numeric_series,
 )
 from ai_data_analyst_agents.statistics.confidence_intervals import (
+    bootstrap_difference_ci,
     difference_in_means_ci,
     difference_in_proportions_ci,
+    single_mean_ci,
     single_proportion_ci,
 )
-from ai_data_analyst_agents.statistics.effect_sizes import cohens_d, cramers_v, odds_ratio, relative_lift
+from ai_data_analyst_agents.statistics.effect_sizes import (
+    cohens_d,
+    cohens_dz,
+    cramers_v,
+    odds_ratio,
+    rank_biserial_from_u,
+    relative_lift,
+)
 from ai_data_analyst_agents.statistics.models import AssumptionCheck, StatisticalResult
+
+
+def _scalar_float(value: Any) -> float:
+    return float(np.asarray(value, dtype=float).reshape(-1)[0])
 
 
 def _decision(p_value: float | None, alpha: float, *, reliable: bool = True) -> str:
     if not reliable:
         return "not_reliable"
-    if p_value is None:
+    if p_value is None or not math.isfinite(float(p_value)):
         return "not_reliable"
     return "reject_null" if p_value < alpha else "fail_to_reject_null"
 
@@ -71,7 +85,8 @@ def welch_t_test(
         check_outlier_sensitivity(b, label=label_b),
         check_multiple_comparisons(1),
     ]
-    statistic, p_value = stats.ttest_ind(a.to_numpy(), b.to_numpy(), equal_var=False, alternative=alternative)
+    stat_raw, p_raw = stats.ttest_ind(a.to_numpy(), b.to_numpy(), equal_var=False, alternative=alternative)
+    statistic, p_value = _scalar_float(stat_raw), _scalar_float(p_raw)
     mean_diff = float(a.mean() - b.mean())
     ci = difference_in_means_ci(a, b, confidence_level=1.0 - alpha, parameter=f"mean({label_a}) - mean({label_b})")
     effect = cohens_d(a, b)
@@ -121,9 +136,16 @@ def paired_t_test(
     alpha: float,
     alternative: str = "two-sided",
 ) -> StatisticalResult:
-    left, left_missing = to_numeric_series(paired[left_col], name=f"{metric}:{label_left}")
-    right, right_missing = to_numeric_series(paired[right_col], name=f"{metric}:{label_right}")
-    aligned = pd.concat([left.reset_index(drop=True), right.reset_index(drop=True)], axis=1).dropna()
+    _, left_missing = to_numeric_series(paired[left_col], name=f"{metric}:{label_left}")
+    _, right_missing = to_numeric_series(paired[right_col], name=f"{metric}:{label_right}")
+    # Preserve row alignment while removing incomplete pairs. Dropping each side
+    # independently would shift values and create pairs that never existed.
+    aligned = pd.DataFrame(
+        {
+            label_left: pd.to_numeric(paired[left_col], errors="coerce"),
+            label_right: pd.to_numeric(paired[right_col], errors="coerce"),
+        }
+    ).dropna()
     diffs = aligned.iloc[:, 0] - aligned.iloc[:, 1]
     assumptions = [
         left_missing,
@@ -133,9 +155,14 @@ def paired_t_test(
         check_outlier_sensitivity(diffs, label="paired differences"),
         check_multiple_comparisons(1),
     ]
-    statistic, p_value = stats.ttest_rel(aligned.iloc[:, 0], aligned.iloc[:, 1], alternative=alternative)
-    ci = difference_in_means_ci(aligned.iloc[:, 0], aligned.iloc[:, 1], confidence_level=1.0 - alpha, parameter=f"paired mean difference {label_left}-{label_right}")
-    effect = cohens_d(aligned.iloc[:, 0], aligned.iloc[:, 1])
+    stat_raw, p_raw = stats.ttest_rel(aligned.iloc[:, 0], aligned.iloc[:, 1], alternative=alternative)
+    statistic, p_value = _scalar_float(stat_raw), _scalar_float(p_raw)
+    ci = single_mean_ci(
+        diffs,
+        confidence_level=1.0 - alpha,
+        parameter=f"paired mean difference {label_left}-{label_right}",
+    )
+    effect = cohens_dz(diffs)
     decision = _decision(float(p_value), alpha, reliable=int(aligned.shape[0]) >= 2)
     return StatisticalResult(
         analysis_id=analysis_id,
@@ -186,9 +213,16 @@ def mann_whitney_u_test(
         check_outlier_sensitivity(b, label=label_b),
         check_multiple_comparisons(1),
     ]
-    statistic, p_value = stats.mannwhitneyu(a.to_numpy(), b.to_numpy(), alternative=alternative)
-    ci = difference_in_means_ci(a, b, confidence_level=1.0 - alpha, parameter=f"mean({label_a}) - mean({label_b})")
-    effect = cohens_d(a, b)
+    stat_raw, p_raw = stats.mannwhitneyu(a.to_numpy(), b.to_numpy(), alternative=alternative)
+    statistic, p_value = _scalar_float(stat_raw), _scalar_float(p_raw)
+    ci = bootstrap_difference_ci(
+        a,
+        b,
+        statistic="median",
+        confidence_level=1.0 - alpha,
+        parameter=f"median({label_a}) - median({label_b})",
+    )
+    effect = rank_biserial_from_u(float(statistic), int(a.shape[0]), int(b.shape[0]))
     decision = _decision(float(p_value), alpha, reliable=min(int(a.shape[0]), int(b.shape[0])) >= 2)
     return StatisticalResult(
         analysis_id=analysis_id,
@@ -230,7 +264,35 @@ def chi_square_independence_test(
     alpha: float,
 ) -> StatisticalResult:
     table = pd.crosstab(left.astype(str), right.astype(str))
-    stat, p_value, dof, _ = stats.chi2_contingency(table.to_numpy())
+    if table.shape[0] < 2 or table.shape[1] < 2:
+        assumption = AssumptionCheck(
+            name="contingency_dimensions",
+            passed=False,
+            detail=f"Chi-square requires at least a 2x2 table; observed shape={table.shape}.",
+            severity="fail",
+        )
+        return StatisticalResult(
+            analysis_id=analysis_id,
+            analysis_type="hypothesis_test",
+            method="chi_square_independence",
+            method_reason="Categorical association was requested, but the contingency table is degenerate.",
+            null_hypothesis=f"{left_name} and {right_name} are independent.",
+            alternative_hypothesis=f"{left_name} and {right_name} are associated.",
+            sample_sizes={"n_rows": int(table.to_numpy().sum())},
+            alpha=alpha,
+            test_statistic=None,
+            p_value=None,
+            decision="not_reliable",
+            interpretation="Categorical association could not be estimated from a degenerate table.",
+            plain_language="At least two observed categories are required in both fields.",
+            assumptions=[assumption],
+            warnings=[assumption.detail],
+            limitations=[assumption.detail],
+            metrics={"contingency_table": table.to_dict()},
+            status="not_reliable",
+        )
+    stat_raw, p_raw, dof_raw, _ = stats.chi2_contingency(table.to_numpy())
+    stat, p_value, dof = _scalar_float(stat_raw), _scalar_float(p_raw), int(dof_raw)
     expected_check, expected_df = check_expected_counts(table)
     assumptions = [expected_check, check_multiple_comparisons(1)]
     effect = cramers_v(float(stat), table)
@@ -275,11 +337,12 @@ def two_proportion_z_test(
     metric: str,
     success_value: Any,
     alpha: float,
+    alternative: str = "two-sided",
 ) -> StatisticalResult:
     validity_a = check_binary_values(group_a, success_value=success_value)
     validity_b = check_binary_values(group_b, success_value=success_value)
-    a = group_a.dropna().map(lambda x: 1 if x == success_value or x is True else 0).astype(int)
-    b = group_b.dropna().map(lambda x: 1 if x == success_value or x is True else 0).astype(int)
+    a = group_a.dropna().map(lambda x: int(x == success_value)).astype(int)
+    b = group_b.dropna().map(lambda x: int(x == success_value)).astype(int)
     n_a = int(a.shape[0])
     n_b = int(b.shape[0])
     success_a = int(a.sum())
@@ -289,7 +352,12 @@ def two_proportion_z_test(
     pooled = (success_a + success_b) / max(1, (n_a + n_b))
     se = math.sqrt(max(1e-12, pooled * (1.0 - pooled) * ((1.0 / max(1, n_a)) + (1.0 / max(1, n_b)))))
     z = (p_a - p_b) / se if se else 0.0
-    p_value = float(2.0 * (1.0 - stats.norm.cdf(abs(z))))
+    if alternative == "greater":
+        p_value = float(1.0 - stats.norm.cdf(z))
+    elif alternative == "less":
+        p_value = float(stats.norm.cdf(z))
+    else:
+        p_value = float(2.0 * (1.0 - stats.norm.cdf(abs(z))))
     assumptions = [
         validity_a,
         validity_b,
@@ -337,6 +405,80 @@ def two_proportion_z_test(
         confidence_intervals=[ci, control_ci],
         effect_sizes=effect_sizes,
         limitations=["Interpret the result with the confidence interval because statistically detectable changes can still be small in practice."],
+        metrics={
+            f"rate_{label_a}": p_a,
+            f"rate_{label_b}": p_b,
+            "absolute_difference": p_a - p_b,
+            "successes": {label_a: success_a, label_b: success_b},
+        },
+    )
+
+
+def fisher_exact_test(
+    *,
+    analysis_id: str,
+    group_a: pd.Series,
+    group_b: pd.Series,
+    label_a: str,
+    label_b: str,
+    metric: str,
+    success_value: Any,
+    alpha: float,
+    alternative: str = "two-sided",
+) -> StatisticalResult:
+    validity_a = check_binary_values(group_a, success_value=success_value)
+    validity_b = check_binary_values(group_b, success_value=success_value)
+    a = group_a.dropna().map(lambda x: int(x == success_value))
+    b = group_b.dropna().map(lambda x: int(x == success_value))
+    n_a, n_b = int(a.shape[0]), int(b.shape[0])
+    success_a, success_b = int(a.sum()), int(b.sum())
+    failure_a, failure_b = n_a - success_a, n_b - success_b
+    table = [[success_a, failure_a], [success_b, failure_b]]
+    result = stats.fisher_exact(table, alternative=alternative)
+    statistic = float(getattr(result, "statistic", result[0]))
+    p_value = float(getattr(result, "pvalue", result[1]))
+    p_a = success_a / n_a if n_a else 0.0
+    p_b = success_b / n_b if n_b else 0.0
+    assumptions = [
+        validity_a,
+        validity_b,
+        check_sample_size(a, min_n=8, label=label_a),
+        check_sample_size(b, min_n=8, label=label_b),
+        check_group_balance(n_a, n_b, label_a=label_a, label_b=label_b),
+        check_multiple_comparisons(1),
+    ]
+    ci = difference_in_proportions_ci(
+        success_a,
+        n_a,
+        success_b,
+        n_b,
+        confidence_level=1.0 - alpha,
+        parameter=f"rate({label_a}) - rate({label_b})",
+    )
+    reliable = n_a > 0 and n_b > 0 and validity_a.passed is not False and validity_b.passed is not False
+    decision = _decision(p_value, alpha, reliable=reliable)
+    return StatisticalResult(
+        analysis_id=analysis_id,
+        analysis_type="hypothesis_test",
+        method="fisher_exact_test",
+        method_reason="Sparse binary outcome counts require Fisher's exact test instead of a normal approximation.",
+        null_hypothesis=f"The odds of {metric} are equal in {label_a} and {label_b}.",
+        alternative_hypothesis=f"The odds of {metric} differ between {label_a} and {label_b}.",
+        sample_sizes={label_a: n_a, label_b: n_b},
+        alpha=alpha,
+        test_statistic=statistic,
+        p_value=p_value,
+        decision=decision,
+        interpretation=(
+            f"Fisher's exact test on {metric}: {label_a} rate={p_a:.4f}, "
+            f"{label_b} rate={p_b:.4f}, odds ratio={statistic:.4f}, p-value={p_value:.4f}."
+        ),
+        plain_language=_plain_language(decision, alpha=alpha, label="Fisher exact test", p_value=p_value),
+        assumptions=assumptions,
+        warnings=summarize_failures(assumptions),
+        confidence_intervals=[ci],
+        effect_sizes=[odds_ratio(success_a, failure_a, success_b, failure_b), relative_lift(p_a, p_b)],
+        limitations=["Fisher's exact test evaluates association in a 2x2 table and does not establish causality."],
         metrics={
             f"rate_{label_a}": p_a,
             f"rate_{label_b}": p_b,

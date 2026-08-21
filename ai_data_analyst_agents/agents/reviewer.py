@@ -49,6 +49,20 @@ def _numeric_lines_without_evidence(section_text: str, citation_map: dict[int, s
 def _violation(rule_id: str, message: str) -> dict[str, str]:
     return {"rule": rule_id, "severity": "fail", "message": message}
 
+
+def _contains_unjustified_causal_language(text: str) -> bool:
+    """Detect affirmative causal claims while allowing explicit causal disclaimers."""
+    for line in (text or "").splitlines():
+        if not CAUSAL_PATTERN.search(line):
+            continue
+        normalized = re.sub(r"\s+", " ", line.lower())
+        if re.search(r"\b(?:not|no) (?:a )?causal(?:ly)?\b", normalized):
+            continue
+        if re.search(r"\b(?:association|associations|observational|correlation|correlations).{0,40}\bnot causal\b", normalized):
+            continue
+        return True
+    return False
+
 class ReviewerAgent(Agent):
     name = "reviewer"
 
@@ -77,7 +91,7 @@ class ReviewerAgent(Agent):
         referenced_evidence = [evidence_store.all().get(ev_id) for ev_id in set(all_ref_ids) if ev_id in evidence_store.all()]
         has_statistical_evidence = any(
             ev is not None and str(ev.artifact_path).startswith("statistics/") for ev in referenced_evidence
-        ) or "### Statistical Questions Evaluated" in report
+        )
 
         violations: list[dict[str, str]] = []
 
@@ -121,22 +135,16 @@ class ReviewerAgent(Agent):
         limitations_text = _section(report, "6) Limitations")
         if not limitations_text.strip():
             violations.append(_violation("limitations.present", "Limitations section is empty."))
-        elif "not computed in artifacts" in limitations_text.lower():
-            metrics_path = store.path("metrics_outputs.json")
-            if metrics_path.exists():
-                try:
-                    import json as _json
-
-                    metrics_out = _json.loads(metrics_path.read_text(encoding="utf-8"))
-                    if not (metrics_out.get("failed") or metrics_out.get("skipped")):
-                        violations.append(
-                            _violation(
-                                "limitations.relevance",
-                                "Limitations mention missing computations, but no failed/skipped tasks were recorded.",
-                            )
-                        )
-                except Exception:
-                    pass
+        memory = ctx.get("memory")
+        readiness = (memory.get("result.insights") if memory is not None else None) or {}
+        if readiness.get("answer_status") == "partial":
+            gaps = list(readiness.get("missing_capabilities", []) or [])
+            violations.append(
+                _violation(
+                    "analysis.coverage",
+                    "Required analytical capabilities were not completed: " + ", ".join(gaps),
+                )
+            )
 
         if has_statistical_evidence:
             if "### Statistical Limitations" not in report:
@@ -170,7 +178,7 @@ class ReviewerAgent(Agent):
                         continue
                     stat_claim_lines.append(line)
             stat_claim_text = "\n".join(stat_claim_lines)
-            if CAUSAL_PATTERN.search(stat_claim_text):
+            if _contains_unjustified_causal_language(stat_claim_text):
                 violations.append(
                     _violation(
                         "stats.causal_language",
@@ -183,6 +191,7 @@ class ReviewerAgent(Agent):
         out = {
             "status": status,
             "evidence_tags_found": len(ev_tags),
+            "evidence_references_found": len(set(all_ref_ids)),
             "missing_refs": missing,
             "notes": notes,
             "violations": violations,

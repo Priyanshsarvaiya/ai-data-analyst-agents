@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 from scipy import stats
@@ -29,10 +30,12 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
     if missing:
         raise ValueError(f"Regression columns not found: {missing}")
 
-    subset = df[required].copy().dropna()
+    input_rows = int(df.shape[0])
+    subset = df[required].copy()
     target = pd.to_numeric(subset[request.target], errors="coerce")
-    predictors = pd.get_dummies(subset[request.predictors], drop_first=True)
-    joined = pd.concat([target.rename(request.target), predictors], axis=1).dropna()
+    predictors = pd.get_dummies(subset[request.predictors], drop_first=True, dtype=float)
+    joined = pd.concat([target.rename(request.target), predictors], axis=1)
+    joined = joined.replace([np.inf, -np.inf], np.nan).dropna()
     if joined.empty:
         raise ValueError("No complete rows available for OLS regression after dropping missing values.")
 
@@ -43,7 +46,29 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
 
     design = sm.add_constant(x, has_constant="add")
     checks = regression_design_checks(design, y)
-    if any(check.name == "design_matrix_rank" and check.passed is False for check in checks):
+    dropped_rows = input_rows - int(joined.shape[0])
+    checks.append(
+        AssumptionCheck(
+            name="complete_case_retention",
+            passed=dropped_rows == 0,
+            detail=f"Regression retained {joined.shape[0]}/{input_rows} complete finite rows.",
+            severity="warn" if dropped_rows else "info",
+        )
+    )
+    insufficient_df = int(joined.shape[0]) <= int(design.shape[1]) + 1
+    if insufficient_df:
+        checks.append(
+            AssumptionCheck(
+                name="residual_degrees_of_freedom",
+                passed=False,
+                detail=(
+                    f"Regression has n={joined.shape[0]} rows and {design.shape[1]} design columns; "
+                    "more observations are required for stable residual inference."
+                ),
+                severity="fail",
+            )
+        )
+    if insufficient_df or any(check.name == "design_matrix_rank" and check.passed is False for check in checks):
         result = StatisticalResult(
             analysis_id=analysis_id,
             analysis_type="regression",
@@ -82,7 +107,7 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
         )
         return result, pd.DataFrame(), {"encoded_columns": list(x.columns)}
 
-    model = sm.OLS(y, design).fit()
+    model = sm.OLS(y, design).fit(cov_type="HC3")
     coeff_table = pd.DataFrame(
         {
             "term": [str(idx) for idx in model.params.index],
@@ -101,7 +126,10 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
     jb_res = stats.jarque_bera(residuals)
     jb_stat = float(getattr(jb_res, "statistic", jb_res[0]))
     jb_p = float(getattr(jb_res, "pvalue", jb_res[1]))
-    bp_stat, bp_p, _, _ = het_breuschpagan(residuals, design)
+    try:
+        bp_stat, bp_p, _, _ = het_breuschpagan(residuals, design)
+    except (ValueError, FloatingPointError):
+        bp_stat, bp_p = float("nan"), float("nan")
     outlier_count = int((residuals.abs() > 3 * residuals.std(ddof=0)).sum()) if residuals.std(ddof=0) else 0
 
     checks.extend(
@@ -114,9 +142,13 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
             ),
             AssumptionCheck(
                 name="heteroskedasticity",
-                passed=bool(bp_p >= request.alpha),
-                detail=f"Breusch-Pagan p-value={bp_p:.4f} (statistic={bp_stat:.4f}).",
-                severity="warn" if bp_p < request.alpha else "info",
+                passed=bool(bp_p >= request.alpha) if np.isfinite(bp_p) else None,
+                detail=(
+                    f"Breusch-Pagan p-value={bp_p:.4f} (statistic={bp_stat:.4f})."
+                    if np.isfinite(bp_p)
+                    else "Breusch-Pagan diagnostic could not be estimated reliably."
+                ),
+                severity="warn" if not np.isfinite(bp_p) or bp_p < request.alpha else "info",
             ),
             AssumptionCheck(
                 name="residual_outliers",
@@ -131,7 +163,10 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
     if x.shape[1] > 1:
         vif_design = design.drop(columns=["const"], errors="ignore")
         for idx, col in enumerate(vif_design.columns):
-            vif_map[str(col)] = float(variance_inflation_factor(vif_design.to_numpy(), idx))
+            try:
+                vif_map[str(col)] = float(variance_inflation_factor(vif_design.to_numpy(), idx))
+            except (ValueError, FloatingPointError, ZeroDivisionError):
+                vif_map[str(col)] = float("inf")
         high_vif = {k: v for k, v in vif_map.items() if v >= 10.0}
         checks.append(
             AssumptionCheck(
@@ -145,14 +180,21 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
     standardized = _standardized_coefficients(design, y) if request.include_standardized else {}
     coeff_table["standardized_beta"] = coeff_table["term"].map(lambda term: standardized.get(str(term)))
 
-    significant_predictors = coeff_table[
-        (coeff_table["term"] != "const") & (coeff_table["p_value"] < request.alpha)
-    ]
-    decision = "reject_null" if not significant_predictors.empty else "fail_to_reject_null"
+    f_pvalue = float(model.f_pvalue) if model.f_pvalue is not None and np.isfinite(model.f_pvalue) else None
+    decision = (
+        "not_reliable"
+        if f_pvalue is None
+        else "reject_null" if f_pvalue < request.alpha else "fail_to_reject_null"
+    )
+    f_summary = (
+        f"robust F-statistic p-value={f_pvalue:.4f}."
+        if f_pvalue is not None
+        else "robust F-statistic p-value unavailable."
+    )
     interpretation = (
         f"OLS fitted {request.target} on {len(request.predictors)} predictor(s). "
         f"R-squared={float(model.rsquared):.4f}, adjusted R-squared={float(model.rsquared_adj):.4f}, "
-        f"F-statistic p-value={float(model.f_pvalue):.4f}."
+        f"{f_summary}"
     )
     plain_language = (
         "At least one predictor shows a statistically detectable association with the target."
@@ -169,7 +211,7 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
         sample_sizes={"n_rows": int(joined.shape[0]), "n_predictors": int(x.shape[1])},
         alpha=request.alpha,
         test_statistic=float(model.fvalue) if model.fvalue is not None else None,
-        p_value=float(model.f_pvalue) if model.f_pvalue is not None else None,
+        p_value=f_pvalue,
         decision=decision,
         interpretation=interpretation,
         plain_language=plain_language + " Regression coefficients reflect association, not necessarily causation.",
@@ -182,7 +224,10 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
             "r_squared": float(model.rsquared),
             "adjusted_r_squared": float(model.rsquared_adj),
             "f_statistic": float(model.fvalue) if model.fvalue is not None else None,
-            "f_pvalue": float(model.f_pvalue) if model.f_pvalue is not None else None,
+            "f_pvalue": f_pvalue,
+            "covariance_type": "HC3",
+            "input_rows": input_rows,
+            "complete_case_rows": int(joined.shape[0]),
         },
         extra_outputs={
             "coefficients": coeff_table.to_dict(orient="records"),
@@ -192,6 +237,7 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
                 "outlier_count": outlier_count,
                 "vif": vif_map,
                 "encoded_columns": list(x.columns),
+                "covariance_type": "HC3",
             },
         },
     )
@@ -202,6 +248,9 @@ def run_ols_regression(df: pd.DataFrame, request: RegressionRequest, *, analysis
         "outlier_count": outlier_count,
         "vif": vif_map,
         "encoded_columns": list(x.columns),
+        "covariance_type": "HC3",
+        "input_rows": input_rows,
+        "complete_case_rows": int(joined.shape[0]),
         "fitted_preview": [float(v) for v in fitted.head(10)],
         "residual_preview": [float(v) for v in residuals.head(10)],
     }

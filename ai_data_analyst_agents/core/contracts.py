@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 AnalysisType = Literal[
@@ -30,6 +30,7 @@ TaskType = Literal[
     "kpi_template_apply",
     "metric_definition",
     "segment_analysis",
+    "gap_decomposition",
     "cohort_analysis",
     "statistical_test",
     "ab_test",
@@ -62,6 +63,7 @@ class AnalysisPlanContract(BaseModel):
     business_question: str
     source_type: str
     suggested_domain: str
+    domain_candidates: List[Dict[str, Any]] = Field(default_factory=list)
     analysis_type: AnalysisType
     routing_reason: str
     routing_confidence: float = Field(ge=0.0, le=1.0)
@@ -90,6 +92,19 @@ class AnalysisTask(BaseModel):
     provenance: TaskProvenance
 
 
+class TaskBudgetContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_tasks: int = Field(ge=0)
+    planned_tasks: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_budget(self) -> "TaskBudgetContract":
+        if self.max_tasks > 0 and self.planned_tasks > self.max_tasks:
+            raise ValueError("planned_tasks cannot exceed max_tasks")
+        return self
+
+
 class PlanningContract(FramingContract):
     model_config = ConfigDict(extra="forbid")
 
@@ -107,9 +122,36 @@ class AnalysisTasksContract(BaseModel):
     blocked_requirements: List[str] = Field(default_factory=list)
     feasibility_status: Literal["feasible", "partially_feasible", "infeasible"]
     planning_contract: PlanningContract
-    task_budget: Dict[str, int] = Field(default_factory=dict)
+    task_budget: TaskBudgetContract
     tasks: List[AnalysisTask] = Field(default_factory=list)
     notes: str = ""
+
+    @model_validator(mode="after")
+    def validate_task_set(self) -> "AnalysisTasksContract":
+        ids = [task.id for task in self.tasks]
+        if len(ids) != len(set(ids)):
+            raise ValueError("analysis task IDs must be unique")
+        semantic_keys = [task.provenance.semantic_key for task in self.tasks]
+        if len(semantic_keys) != len(set(semantic_keys)):
+            raise ValueError("analysis task semantic keys must be unique")
+        if self.task_budget.planned_tasks != len(self.tasks):
+            raise ValueError("task_budget.planned_tasks must equal the number of tasks")
+        return self
+
+
+class AnalysisReadinessContract(BaseModel):
+    """Question-level coverage gate produced before report generation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: ArtifactSchemaVersion
+    analysis_type: AnalysisType | None = None
+    answer_status: Literal["ready", "partial", "blocked"]
+    required_capabilities: List[str] = Field(default_factory=list)
+    computed_capabilities: List[str] = Field(default_factory=list)
+    missing_capabilities: List[str] = Field(default_factory=list)
+    failed_or_skipped_capabilities: List[str] = Field(default_factory=list)
+    reporting_guidance: List[str] = Field(default_factory=list)
 
 
 class MetricsComputedItem(BaseModel):
@@ -152,6 +194,19 @@ class MetricsOutputsContract(BaseModel):
     metric_registry: Dict[str, Any] = Field(default_factory=dict)
     followup: Dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_task_outcomes(self) -> "MetricsOutputsContract":
+        computed = [item.task_id for item in self.computed]
+        failed = [item.task_id for item in self.failed]
+        skipped = [item.task_id for item in self.skipped]
+        for label, ids in (("computed", computed), ("failed", failed), ("skipped", skipped)):
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"duplicate task IDs in metrics {label} outcomes")
+        overlaps = (set(computed) & set(failed)) | (set(computed) & set(skipped)) | (set(failed) & set(skipped))
+        if overlaps:
+            raise ValueError(f"metric tasks cannot have multiple terminal outcomes: {sorted(overlaps)}")
+        return self
+
 
 class ReportMetadataContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -191,6 +246,10 @@ def validate_analysis_tasks_contract(obj: Dict[str, Any]) -> AnalysisTasksContra
 
 def validate_metrics_outputs_contract(obj: Dict[str, Any]) -> MetricsOutputsContract:
     return MetricsOutputsContract.model_validate(obj)
+
+
+def validate_analysis_readiness_contract(obj: Dict[str, Any]) -> AnalysisReadinessContract:
+    return AnalysisReadinessContract.model_validate(obj)
 
 
 def validate_report_metadata_contract(obj: Dict[str, Any]) -> ReportMetadataContract:

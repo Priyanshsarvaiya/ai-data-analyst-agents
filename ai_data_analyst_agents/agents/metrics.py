@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 import pandas as pd
 
 from ai_data_analyst_agents.core.agent_base import Agent
@@ -11,7 +11,6 @@ from ai_data_analyst_agents.core.contracts import (
 from ai_data_analyst_agents.core.kpi_templates import detect_business_domain, pick_template_dimension
 from ai_data_analyst_agents.core.kpi_templates import (
     default_agg_for_metric,
-    is_agg_allowed_for_metric,
 )
 from ai_data_analyst_agents.core.metric_semantics import (
     build_metric_registry_snapshot,
@@ -57,6 +56,7 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     - recency_by_group: {group_by, date_col}
     - topk: {by, metric, agg?, k?}
     - timeseries_agg: {date_col, metric, freq?, agg?}
+    - gap_decomposition: {segment_by, metric, focus_segment?}
     - statistical_test: {group_col, metric, group_a?, group_b?, compare_to_rest?, paired?, pair_id_col?, success_value?, alpha?, alternative?}
     - ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?}
     - ols_regression: {target, predictors, alpha?}
@@ -127,6 +127,14 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "quantiles" not in p or not isinstance(p.get("quantiles"), list):
             p["quantiles"] = [0.5, 0.75, 0.9, 0.95, 0.99]
+
+    elif ttype == "gap_decomposition":
+        if "segment_by" not in p:
+            p["segment_by"] = _first_present(p, ["segment_by", "group_by", "dimension", "by"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y"])
+        if "focus_segment" not in p:
+            p["focus_segment"] = _first_present(p, ["focus_segment", "focus_group", "target_segment"])
 
     elif ttype == "recency_by_group":
         if "group_by" not in p:
@@ -281,6 +289,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             p["alpha"] = _first_present(p, ["alpha", "significance_level"]) or 0.05
         if "alternative" not in p:
             p["alternative"] = _first_present(p, ["alternative"]) or "two-sided"
+        if str(p["alternative"]) not in {"two-sided", "less", "greater"}:
+            p["alternative"] = "two-sided"
         p["compare_to_rest"] = bool(p.get("compare_to_rest", False))
         p["paired"] = bool(p.get("paired", False))
 
@@ -297,6 +307,12 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             p["metric_type"] = _first_present(p, ["metric_type", "outcome_type"]) or "auto"
         if "alpha" not in p:
             p["alpha"] = _first_present(p, ["alpha", "significance_level"]) or 0.05
+        if str(p["metric_type"]) not in {"auto", "binary", "continuous"}:
+            p["metric_type"] = "auto"
+        if "alternative" not in p:
+            p["alternative"] = _first_present(p, ["alternative"]) or "two-sided"
+        if str(p["alternative"]) not in {"two-sided", "less", "greater"}:
+            p["alternative"] = "two-sided"
 
     elif ttype == "ols_regression":
         if "target" not in p:
@@ -336,8 +352,8 @@ def _ensure_col(df: pd.DataFrame, col: str) -> None:
 
 def _safe_agg(series: pd.Series, agg: str) -> float:
     agg = (agg or "sum").lower().strip()
-    if agg not in {"sum", "mean", "min", "max", "median", "count"}:
-        raise ValueError(f"Unsupported agg '{agg}'. Use one of sum/mean/min/max/median/count.")
+    if agg not in {"sum", "mean", "min", "max", "median", "count", "nunique"}:
+        raise ValueError(f"Unsupported agg '{agg}'. Use one of sum/mean/min/max/median/count/nunique.")
 
     if agg == "sum":
         return float(series.sum())
@@ -351,9 +367,81 @@ def _safe_agg(series: pd.Series, agg: str) -> float:
         return float(series.median())
     if agg == "count":
         return float(series.count())
+    if agg == "nunique":
+        return float(series.nunique(dropna=True))
+    raise AssertionError(f"Unhandled aggregation: {agg}")
 
     # unreachable
     return float(series.sum())
+
+
+def _compute_gap_decomposition(
+    df: pd.DataFrame,
+    *,
+    segment_by: str,
+    metric: str,
+    focus_segment: str | None,
+    question: str,
+) -> Dict[str, Any]:
+    """Exact two-factor decomposition: total = row volume * average value."""
+    _ensure_col(df, segment_by)
+    _ensure_col(df, metric)
+    work = df[[segment_by, metric]].copy()
+    work[metric] = pd.to_numeric(work[metric], errors="coerce")
+    work = work.dropna(subset=[segment_by, metric])
+    if work.empty:
+        raise ValueError(f"No usable rows for gap decomposition ({segment_by}, {metric}).")
+
+    grouped = work.groupby(segment_by, dropna=False)[metric].agg(["sum", "count", "mean"])
+    grouped = grouped.sort_values("sum", ascending=False)
+    labels = [str(x) for x in grouped.index.tolist()]
+    chosen = str(focus_segment).strip() if focus_segment is not None else ""
+    if not chosen:
+        q = (question or "").lower()
+        chosen = next((label for label in labels if label.lower() in q), labels[-1])
+    label_lookup = {str(x): x for x in grouped.index.tolist()}
+    if chosen not in label_lookup:
+        raise ValueError(f"Focus segment '{chosen}' not found in {segment_by}.")
+
+    focus_key = label_lookup[chosen]
+    benchmark_key = next((x for x in grouped.index.tolist() if x != focus_key), focus_key)
+    focus = grouped.loc[focus_key]
+    benchmark = grouped.loc[benchmark_key]
+    focus_total = float(focus["sum"])
+    benchmark_total = float(benchmark["sum"])
+    focus_count = int(focus["count"])
+    benchmark_count = int(benchmark["count"])
+    focus_avg = float(focus["mean"])
+    benchmark_avg = float(benchmark["mean"])
+    absolute_gap = benchmark_total - focus_total
+    volume_effect = (benchmark_count - focus_count) * focus_avg
+    value_effect = benchmark_count * (benchmark_avg - focus_avg)
+
+    return {
+        "analysis_type": "gap_decomposition",
+        "identity": f"sum({metric}) = row_count * mean({metric})",
+        "segment_by": segment_by,
+        "metric": metric,
+        "focus_segment": str(focus_key),
+        "benchmark_segment": str(benchmark_key),
+        "focus_total": focus_total,
+        "benchmark_total": benchmark_total,
+        "absolute_gap": absolute_gap,
+        "focus_relationship": "trails" if absolute_gap > 0 else ("leads" if absolute_gap < 0 else "equals"),
+        "relative_gap_pct": (absolute_gap / benchmark_total * 100.0) if benchmark_total else None,
+        "focus_row_count": focus_count,
+        "benchmark_row_count": benchmark_count,
+        "focus_average_value": focus_avg,
+        "benchmark_average_value": benchmark_avg,
+        "effects": {
+            "row_volume_effect": float(volume_effect),
+            "average_value_effect": float(value_effect),
+            "reconciliation_total": float(volume_effect + value_effect),
+        },
+        "interpretation_guardrail": (
+            "This is an arithmetic contribution decomposition of an observed gap, not evidence of causality."
+        ),
+    }
 
 
 def _metric_and_agg_for_task(ttype: str, params: Dict[str, Any]) -> tuple[str | None, str | None]:
@@ -366,8 +454,11 @@ def _metric_and_agg_for_task(ttype: str, params: Dict[str, Any]) -> tuple[str | 
         "topk",
         "timeseries_agg",
         "segment_analysis",
+        "gap_decomposition",
     }:
         metric = p.get("metric")
+        if ttype == "gap_decomposition":
+            return (str(metric), "sum") if metric is not None else (None, "sum")
         agg = p.get("agg", "sum")
         return (str(metric), str(agg)) if metric is not None else (None, str(agg))
 
@@ -798,6 +889,30 @@ class MetricsAgent(Agent):
                     )
                     outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
 
+                elif ttype == "gap_decomposition":
+                    _require_params(tid, ttype, p, ["segment_by", "metric"])
+                    payload = _compute_gap_decomposition(
+                        df,
+                        segment_by=str(p["segment_by"]),
+                        metric=str(p["metric"]),
+                        focus_segment=str(p["focus_segment"]) if p.get("focus_segment") is not None else None,
+                        question=str(ctx.get("business_question", "")),
+                    )
+                    artifact = f"{tid}_gap_decomposition_{p['segment_by']}_{p['metric']}.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer="effects",
+                        summary=(
+                            f"Observed {p['metric']} gap decomposed into row-volume and average-value effects "
+                            f"across {p['segment_by']}"
+                        ),
+                    )
+                    outputs["computed"].append(
+                        {"task_id": tid, "task_type": ttype, "artifact": artifact, "evidence_id": ev.id}
+                    )
+
                 elif ttype == "recency_by_group":
                     _require_params(tid, ttype, p, ["group_by", "date_col"])
                     group = str(p["group_by"])
@@ -1071,7 +1186,10 @@ class MetricsAgent(Agent):
                         pair_id_col=str(p["pair_id_col"]) if p.get("pair_id_col") else None,
                         success_value=p.get("success_value", 1),
                         alpha=float(p.get("alpha", 0.05)),
-                        alternative=str(p.get("alternative", "two-sided")),
+                        alternative=cast(
+                            Literal["two-sided", "less", "greater"],
+                            str(p.get("alternative", "two-sided")),
+                        ),
                     )
                     selection, result = run_hypothesis_test(df, req, analysis_id=tid)
                     bundle = write_statistical_artifacts(store, task_id=tid, result=result)
@@ -1104,9 +1222,16 @@ class MetricsAgent(Agent):
                         control=p["control"],
                         treatment=p["treatment"],
                         metric=str(p["metric"]),
-                        metric_type=str(p.get("metric_type", "auto")),
+                        metric_type=cast(
+                            Literal["auto", "binary", "continuous"],
+                            str(p.get("metric_type", "auto")),
+                        ),
                         success_value=p.get("success_value", 1),
                         alpha=float(p.get("alpha", 0.05)),
+                        alternative=cast(
+                            Literal["two-sided", "less", "greater"],
+                            str(p.get("alternative", "two-sided")),
+                        ),
                     )
                     result = run_ab_test(df, req, analysis_id=tid)
                     bundle = write_statistical_artifacts(store, task_id=tid, result=result)

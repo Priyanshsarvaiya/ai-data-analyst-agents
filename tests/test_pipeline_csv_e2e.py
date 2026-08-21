@@ -33,6 +33,7 @@ def test_csv_pipeline_end_to_end_outputs(
         "review_log.json",
         "run_scorecard.json",
         "agent_messages.json",
+        "shared_memory_audit.json",
         "run_manifest.json",
     ]
     assert_artifacts_exist(run_dir, expected_files)
@@ -59,6 +60,14 @@ def test_csv_pipeline_end_to_end_outputs(
     assert scorecard["final_quality_status"] in {"pass", "fail"}
     manifest = read_json(run_dir / "run_manifest.json")
     assert manifest.get("quality_status") in {"pass", "fail"}
+    memory_audit = read_json(run_dir / "shared_memory_audit.json")
+    expected_agents = {
+        "intake", "profiling", "quality", "wrangling", "planner", "metrics",
+        "next_steps", "eda", "insights", "reporting", "reviewer", "scorecard",
+    }
+    assert expected_agents.issubset(memory_audit["actors"])
+    for agent_name in expected_agents:
+        assert f"result.{agent_name}" in memory_audit["actors"][agent_name]["write"]
 
 
 def test_csv_pipeline_handles_missing_expected_columns(

@@ -11,6 +11,7 @@ from ai_data_analyst_agents.core.kpi_templates import (
     is_agg_allowed_for_metric,
     pick_cohort_columns,
     pick_template_dimension,
+    score_business_domains,
 )
 from ai_data_analyst_agents.core.metric_engine import (
     compute_cohort_retention,
@@ -25,11 +26,23 @@ def test_business_domain_and_template_helpers() -> None:
     assert detect_business_domain("Show mrr and churn by plan", schema_cols) == "saas"
     assert pick_template_dimension("saas", schema_cols) == "plan"
     assert pick_cohort_columns("saas", schema_cols) == ("account_id", "signup_date")
+    ranked = score_business_domains("Show MRR and churn by plan", schema_cols)
+    assert ranked[0]["domain"] == "saas"
+    assert ranked[0]["score"] > ranked[1]["score"]
+
+
+def test_domain_detection_uses_general_fallback_and_normalized_columns() -> None:
+    assert detect_business_domain("Summarize this file", ["x", "y"]) == "general"
+    schema_cols = ["Employee ID", "Base Salary", "Department", "Hire Date"]
+    assert detect_business_domain("Review workforce headcount", schema_cols) == "people"
+    assert pick_template_dimension("people", schema_cols) == "Department"
+    assert pick_cohort_columns("people", schema_cols) == ("Employee ID", "Hire Date")
 
 
 def test_metric_semantics_helpers() -> None:
     assert default_agg_for_metric("revenue") == "sum"
-    assert default_agg_for_metric("order_id") == "count"
+    assert default_agg_for_metric("order_id") == "nunique"
+    assert default_agg_for_metric("clicks") == "sum"
     assert is_agg_allowed_for_metric("conversion_rate", "mean")
     assert not is_agg_allowed_for_metric("conversion_rate", "sum")
 
@@ -42,6 +55,8 @@ def test_compute_template_kpis_ecommerce(sample_df: pd.DataFrame) -> None:
     assert out["derived_kpis"]["avg_order_value"] == pytest.approx(
         float(sample_df["revenue"].sum() / sample_df["order_id"].count())
     )
+    assert out["coverage"]["resolved_count"] >= 3
+    assert out["metric_metadata"]["order_count"]["aggregation"] == "nunique"
 
 
 def test_compute_metric_definition_supports_agg_and_expression(sample_df: pd.DataFrame) -> None:

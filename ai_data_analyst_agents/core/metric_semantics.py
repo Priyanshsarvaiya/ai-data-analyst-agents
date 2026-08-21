@@ -25,6 +25,7 @@ class MetricSemantics:
 _KIND_GRAIN_COMPATIBILITY: Dict[str, Tuple[GrainKind, ...]] = {
     "additive": ("overall", "segment", "time", "group", "cohort"),
     "count": ("overall", "segment", "time", "group", "cohort"),
+    "identifier": ("overall", "segment", "time", "group", "cohort"),
     "duration": ("overall", "segment", "time", "group", "cohort"),
     "ratio": ("overall", "segment", "time", "group"),
     "rate": ("overall", "segment", "time", "group"),

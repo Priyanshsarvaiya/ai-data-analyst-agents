@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Analysis result · Analyst OS{% endblock %}
+{% block content %}
+<main class="shell result-shell">
+  <a class="back-link" href="{{ url_for('dashboard') }}">← Back to workspace</a>
+  <section class="result-hero">
+    <div>
+      <span class="status status-{{ run.status }}"><i></i>{{ run.status }}</span>
+      <h1>{{ run.run_metadata.get('business_question', 'Analysis result') }}</h1>
+      <p>{{ run.source_type|upper }} · {{ run.source_name or 'Data source' }} · {{ run.created_at[:10] }}</p>
+    </div>
+    <div class="result-score"><span>Reviewer</span><strong>{{ review.get('status', '—')|title }}</strong></div>
+  </section>
+
+  <section class="metric-grid">
+    <article><span>Rows analyzed</span><strong>{{ profile.get('n_rows', '—') }}</strong></article>
+    <article><span>Columns</span><strong>{{ profile.get('n_cols', '—') }}</strong></article>
+    <article><span>Duplicate rate</span><strong>{% if quality.get('duplicate_rate') is not none %}{{ '%.1f%%'|format(quality.get('duplicate_rate', 0) * 100) }}{% else %}—{% endif %}</strong></article>
+    <article><span>Quality warnings</span><strong>{{ quality.get('warnings', [])|length }}</strong></article>
+  </section>
+
+  <nav class="result-tabs" data-tabs>
+    <button class="active" data-tab="report">Report</button>
+    <button data-tab="charts">Charts <span>{{ charts|length }}</span></button>
+    <button data-tab="artifacts">Artifacts <span>{{ detail.artifacts|length }}</span></button>
+    <button data-tab="logs">Logs</button>
+  </nav>
+
+  <section class="result-panel active" data-panel="report">
+    <article class="report-content">{{ report_html }}</article>
+  </section>
+  <section class="result-panel" data-panel="charts">
+    {% if charts %}<div class="chart-grid">{% for chart in charts %}<figure><img src="{{ url_for('artifact', run_uuid=run.run_uuid, artifact_path=chart.artifact_path) }}" alt="{{ chart.artifact_name }}"><figcaption>{{ chart.artifact_name }}</figcaption></figure>{% endfor %}</div>
+    {% else %}<div class="empty-card"><h3>No charts generated</h3><p>This analysis did not produce chart artifacts.</p></div>{% endif %}
+  </section>
+  <section class="result-panel" data-panel="artifacts">
+    <div class="artifact-list">{% for item in detail.artifacts %}<a href="{{ url_for('artifact', run_uuid=run.run_uuid, artifact_path=item.artifact_path, download=1) }}"><span class="file-type">{{ item.artifact_name.split('.')[-1]|upper }}</span><span><b>{{ item.artifact_name }}</b><small>{{ item.artifact_type }} · {{ item.file_size_bytes|filesize }}</small></span><em>Download ↓</em></a>{% endfor %}</div>
+  </section>
+  <section class="result-panel" data-panel="logs">
+    {% set log_artifact = detail.artifacts|selectattr('artifact_name', 'equalto', 'logs.txt')|first %}
+    {% if log_artifact %}<a class="button button-secondary" href="{{ url_for('artifact', run_uuid=run.run_uuid, artifact_path=log_artifact.artifact_path, download=1) }}">Download run logs</a>{% else %}<p class="empty-state">No logs available.</p>{% endif %}
+  </section>
+</main>
+{% endblock %}

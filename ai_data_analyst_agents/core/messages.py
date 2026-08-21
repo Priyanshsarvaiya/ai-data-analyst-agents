@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 Role = Literal["system", "agent", "tool"]
@@ -12,6 +12,6 @@ class Message:
     role: Role
     content: str
     data: Dict[str, Any] = field(default_factory=dict)
-    ts: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     parent_id: Optional[str] = None

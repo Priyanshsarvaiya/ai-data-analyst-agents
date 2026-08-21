@@ -18,6 +18,33 @@ class ProfilingAgent(Agent):
             "datetime_candidates": detect_probable_datetime_columns(df),
             "column_profiles": infer_column_profiles(df),
         }
+        n_rows = int(df.shape[0])
+        profile["candidate_keys"] = [
+            str(c)
+            for c in df.columns
+            if n_rows > 0 and int(df[c].nunique(dropna=False)) == n_rows and not bool(df[c].isna().any())
+        ]
+        profile["constant_columns"] = [str(c) for c in df.columns if int(df[c].nunique(dropna=False)) <= 1]
+        profile["high_cardinality_columns"] = [
+            str(c)
+            for c in df.columns
+            if n_rows > 0 and int(df[c].nunique(dropna=True)) / n_rows >= 0.9
+        ]
+        profile["inferred_grain"] = (
+            f"one row per {profile['candidate_keys'][0]}"
+            if profile["candidate_keys"]
+            else "row-level records; no unique key identified"
+        )
+        date_coverage: Dict[str, Any] = {}
+        for col in profile["datetime_candidates"]:
+            parsed = pd.to_datetime(df[col], errors="coerce")
+            valid = parsed.dropna()
+            date_coverage[col] = {
+                "valid_rate": float(parsed.notna().mean()) if n_rows else 0.0,
+                "min": valid.min().isoformat() if not valid.empty else None,
+                "max": valid.max().isoformat() if not valid.empty else None,
+            }
+        profile["date_coverage"] = date_coverage
 
         sql_schema = ctx.get("sql_schema")
         if isinstance(sql_schema, dict):

@@ -81,6 +81,7 @@ class ScorecardAgent(Agent):
         plan_out = memory.get("result.planner") or {}
         metrics_out = memory.get("result.metrics") or {}
         review_out = memory.get("result.reviewer") or {}
+        readiness_out = memory.get("result.insights") or {}
         report_meta = memory.get("result.reporting_metadata") or {}
 
         tasks = list(plan_out.get("tasks", []) or [])
@@ -123,6 +124,8 @@ class ScorecardAgent(Agent):
         if int(report_meta.get("unsupported_numeric_claim_lines", 1)) > 0:
             quality_status = "fail"
         if not bool(report_meta.get("section_completeness_ok", False)):
+            quality_status = "fail"
+        if readiness_out and str(readiness_out.get("answer_status")) == "partial":
             quality_status = "fail"
 
         analysis_type = (
@@ -173,6 +176,9 @@ class ScorecardAgent(Agent):
                 "report_unsupported_numeric_claim_lines": int(report_meta.get("unsupported_numeric_claim_lines", 0)),
                 "report_section_completeness_ok": bool(report_meta.get("section_completeness_ok", False)),
                 "report_contradiction_count": int(report_meta.get("contradiction_count", 0)),
+                "analysis_readiness_status": str(readiness_out.get("answer_status", "unknown")),
+                "missing_analysis_capabilities": list(readiness_out.get("missing_capabilities", []) or []),
+                "report_revision_attempted": bool(review_out.get("revision_attempted", False)),
             },
             "final_quality_status": quality_status,
         }

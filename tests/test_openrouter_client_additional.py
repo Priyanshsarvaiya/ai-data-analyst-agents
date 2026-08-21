@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import httpx
 import pytest
 
-from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
+from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient, OpenRouterError
 
 
 @dataclass
@@ -67,17 +67,18 @@ def test_openrouter_chat_parses_dict_content(monkeypatch: pytest.MonkeyPatch) ->
     assert client.chat(model="x", messages=[{"role": "user", "content": "hi"}]) == "dict-content"
 
 
-def test_openrouter_chat_returns_empty_on_no_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openrouter_chat_raises_on_no_choices(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeClient([_FakeResponse(200, {"choices": []})])
     client = _mk_client(monkeypatch, fake)
-    assert client.chat(model="x", messages=[{"role": "user", "content": "hi"}]) == ""
+    with pytest.raises(OpenRouterError, match="no completion choices"):
+        client.chat(model="x", messages=[{"role": "user", "content": "hi"}])
 
 
-def test_openrouter_chat_retries_and_returns_empty_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openrouter_chat_retries_and_raises_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
     responses = [_FakeResponse(429, {}), _FakeResponse(429, {}), _FakeResponse(429, {}), _FakeResponse(429, {})]
     fake = _FakeClient(responses)
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
     client = _mk_client(monkeypatch, fake)
-    out = client.chat(model="x", messages=[{"role": "user", "content": "hi"}])
-    assert out == ""
+    with pytest.raises(OpenRouterError, match="after 4 attempts"):
+        client.chat(model="x", messages=[{"role": "user", "content": "hi"}])
     assert fake.calls == 4

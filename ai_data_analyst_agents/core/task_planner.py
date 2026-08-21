@@ -8,6 +8,7 @@ TaskName = Literal[
     "quality",
     "wrangling",
     "eda",
+    "insights",
     "reporting",
     "reviewer",
     "planner",
@@ -55,7 +56,10 @@ def default_tasks_phase2() -> List[Task]:
             "eda",
             "Generate question-aware visualizations from computed artifacts and dataset context."
         ),
-
+        Task(
+            "insights",
+            "Check whether completed computations cover the question and define safe claim language before reporting."
+        ),
         Task(
             "reporting",
             "Synthesize findings into a structured, evidence-backed analytical report answering the business question."

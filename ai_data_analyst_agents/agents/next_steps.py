@@ -40,10 +40,15 @@ def _task_key(task: Dict[str, Any]) -> str:
 
 
 def _task_semantic_key(task: Dict[str, Any]) -> str:
+    params = {
+        k: v
+        for k, v in dict(task.get("params", {}) or {}).items()
+        if k not in {"limit", "k"}
+    }
     return json.dumps(
         {
             "type": str(task.get("type", "")).strip(),
-            "params": dict(sorted(dict(task.get("params", {}) or {}).items(), key=lambda kv: kv[0])),
+            "params": dict(sorted(params.items(), key=lambda kv: kv[0])),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -222,6 +227,7 @@ def _build_followup_candidates(
         candidates.append(task)
 
     if metric and primary_dim and why_intent:
+        add("gap_decomposition", {"segment_by": primary_dim, "metric": metric})
         add("groupby_agg", {"group_by": primary_dim, "metric": metric, "agg": "count", "limit": 1000})
         add("groupby_agg", {"group_by": primary_dim, "metric": metric, "agg": "mean", "limit": 1000})
         if count_metric:
@@ -376,7 +382,10 @@ class NextStepsAgent(Agent):
             "blocked_requirements": list(planner_out.get("blocked_requirements", []) or []),
             "feasibility_status": str(planner_out.get("feasibility_status", "partially_feasible")),
             "planning_contract": planner_out.get("planning_contract", {}),
-            "task_budget": {"max_tasks": int(budget), "planned_tasks": int(len(existing_tasks) + len(followup_tasks))},
+            "task_budget": {
+                "max_tasks": int((planner_out.get("task_budget") or {}).get("max_tasks", len(existing_tasks)) + budget),
+                "planned_tasks": int(len(existing_tasks) + len(followup_tasks)),
+            },
             "tasks": [*existing_tasks, *followup_tasks],
             "notes": str(planner_out.get("notes", "")).strip() + " + next_steps gap-closure expansion",
         }

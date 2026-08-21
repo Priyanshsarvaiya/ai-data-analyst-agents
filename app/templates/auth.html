@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Analyst OS{% endblock %}
+{% block body_class %}auth-page{% endblock %}
+{% block content %}
+<main class="auth-layout">
+  <section class="auth-story">
+    <a class="brand brand-light" href="{{ url_for('index') }}">
+      <span class="brand-mark">A</span>
+      <span>Analyst<span class="brand-dot">.</span></span>
+    </a>
+    <div class="story-copy">
+      <span class="eyebrow eyebrow-light">Evidence-first analytics</span>
+      <h1>From raw data to a decision you can defend.</h1>
+      <p>A coordinated team of specialist agents profiles, validates, analyzes, and reviews every result.</p>
+    </div>
+    <div class="story-proof">
+      <div><strong>11</strong><span>specialist agents</span></div>
+      <div><strong>2</strong><span>source types</span></div>
+      <div><strong>100%</strong><span>artifact traced</span></div>
+    </div>
+    <div class="orb orb-one"></div><div class="orb orb-two"></div>
+  </section>
+
+  <section class="auth-panel">
+    <div class="auth-card">
+      <span class="eyebrow">Secure workspace</span>
+      <h2>{{ "Create your account" if mode == "signup" else "Welcome back" }}</h2>
+      <p class="subtle">{{ "Start turning questions into reliable answers." if mode == "signup" else "Sign in to continue to your analysis workspace." }}</p>
+
+      <div class="auth-switch" role="tablist" aria-label="Authentication mode">
+        <a class="{{ 'active' if mode != 'signup' }}" href="{{ url_for('auth', mode='login') }}">Sign in</a>
+        <a class="{{ 'active' if mode == 'signup' }}" href="{{ url_for('auth', mode='signup') }}">Create account</a>
+      </div>
+
+      <form class="form-stack" method="post" action="{{ url_for('auth', mode=mode) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="mode" value="{{ mode }}">
+        {% if mode == "signup" %}
+        <label class="field">
+          <span>Full name</span>
+          <input name="full_name" autocomplete="name" placeholder="Jordan Lee" required minlength="2">
+        </label>
+        {% endif %}
+        <label class="field">
+          <span>{{ "Work email" if mode == "signup" else "Email address" }}</span>
+          <input type="email" name="email" autocomplete="email" placeholder="you@company.com" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <div class="password-field">
+            <input type="password" name="password" autocomplete="{{ 'new-password' if mode == 'signup' else 'current-password' }}" required>
+            <button type="button" class="password-toggle" aria-label="Show password">Show</button>
+          </div>
+        </label>
+        {% if mode == "signup" %}
+        <label class="field">
+          <span>Confirm password</span>
+          <div class="password-field">
+            <input type="password" name="confirm_password" autocomplete="new-password" required>
+            <button type="button" class="password-toggle" aria-label="Show password">Show</button>
+          </div>
+        </label>
+        <p class="field-help">12+ characters with uppercase, lowercase, number, and symbol.</p>
+        {% endif %}
+        <button class="button button-primary button-full" type="submit">
+          {{ "Create account" if mode == "signup" else "Sign in" }} <span>→</span>
+        </button>
+      </form>
+      <p class="security-note"><span>✓</span> Credentials are encrypted and sessions expire automatically.</p>
+    </div>
+  </section>
+</main>
+{% endblock %}

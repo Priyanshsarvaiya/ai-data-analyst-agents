@@ -5,28 +5,34 @@ description = "Multi-agent analytics pipeline (Phase 1: CSV -> artifacts -> repo
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "pandas>=2.2.0",
-  "numpy>=1.26.0",
-  "scipy>=1.17.0",
+  "pandas>=2.3.3",
+  "numpy>=2.2.6",
+  "scipy>=1.15.3",
   "statsmodels>=0.14.6",
-  "matplotlib>=3.8.0",
-  "pydantic>=2.6.0",
-  "pydantic-settings>=2.2.0",
-  "pyyaml>=6.0.1",
-  "httpx>=0.27.0",
-  "sqlalchemy>=2.0.0",
-  "psycopg[binary]>=3.1.18",
-  "rich>=13.7.0",
+  "matplotlib>=3.10.9",
+  "pydantic>=2.13.4",
+  "pydantic-settings>=2.15.0",
+  "pyyaml>=6.0.3",
+  "httpx>=0.28.1",
+  "sqlalchemy>=2.0.52",
+  "psycopg[binary]>=3.3.4",
+  "rich>=15.0.0",
+  "flask>=3.1.3",
+  "markdown>=3.10.3",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0.0",
-  "ruff>=0.4.0",
+  "pytest>=9.1.1",
+  "pyright>=1.1.411",
+  "ruff>=0.16.4",
+  "pandas-stubs>=3.0.5.260730",
+  "scipy-stubs>=1.18.0.1",
+  "types-PyYAML>=6.0.12.20260815",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
 from ai_data_analyst_agents.statistics.models import AssumptionCheck
+
+
+def _scalar_float(value: Any) -> float:
+    return float(np.asarray(value, dtype=float).reshape(-1)[0])
 
 
 def _series_name(series: pd.Series, fallback: str) -> str:
@@ -18,7 +23,7 @@ def _series_name(series: pd.Series, fallback: str) -> str:
 
 def to_numeric_series(series: pd.Series, *, name: str | None = None) -> tuple[pd.Series, AssumptionCheck]:
     original_n = int(series.shape[0])
-    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    numeric = cast(pd.Series, pd.to_numeric(series, errors="coerce")).dropna()
     kept_n = int(numeric.shape[0])
     dropped = original_n - kept_n
     detail = f"Converted to numeric and kept {kept_n}/{original_n} rows."
@@ -87,7 +92,8 @@ def check_normality(series: pd.Series, *, alpha: float, label: str) -> Assumptio
             metric=label,
         )
     if n <= 5000:
-        stat, p_value = stats.shapiro(clean.to_numpy())
+        stat_raw, p_raw = stats.shapiro(clean.to_numpy())
+        stat, p_value = _scalar_float(stat_raw), _scalar_float(p_raw)
         passed = bool(p_value >= alpha)
         return AssumptionCheck(
             name="normality",
@@ -116,7 +122,8 @@ def check_equal_variance(a: pd.Series, b: pd.Series, *, alpha: float) -> Assumpt
             detail="Equal-variance test skipped because one or both groups have fewer than 2 observations.",
             severity="warn",
         )
-    stat, p_value = stats.levene(a.to_numpy(), b.to_numpy(), center="median")
+    stat_raw, p_raw = stats.levene(a.to_numpy(), b.to_numpy(), center="median")
+    stat, p_value = _scalar_float(stat_raw), _scalar_float(p_raw)
     passed = bool(p_value >= alpha)
     return AssumptionCheck(
         name="equal_variance",
@@ -156,13 +163,17 @@ def check_outlier_sensitivity(series: pd.Series, *, label: str) -> AssumptionChe
 
 def coerce_binary(series: pd.Series, *, success_value: Any) -> tuple[pd.Series, AssumptionCheck]:
     raw = series.dropna()
-    binary = raw.map(lambda x: 1 if x == success_value else (0 if x in {0, 1, True, False} or x != success_value else 0))
-    unique_vals = set(binary.dropna().unique().tolist())
-    passed = unique_vals.issubset({0, 1})
+    observed = set(raw.unique().tolist())
+    passed = success_value in observed and len(observed) <= 2
+    binary = raw.map(lambda x: 1 if x == success_value else 0)
+    unique_vals = set(binary.unique().tolist())
     return binary.astype(int), AssumptionCheck(
         name="binary_metric_validity",
         passed=passed,
-        detail=f"Binary coercion produced values {sorted(unique_vals)} using success_value={success_value!r}.",
+        detail=(
+            f"Observed values={sorted(repr(v) for v in observed)}; binary coercion produced "
+            f"{sorted(unique_vals)} using success_value={success_value!r}."
+        ),
         severity="fail" if not passed else "info",
         metric=_series_name(series, "binary_metric"),
     )
@@ -171,7 +182,7 @@ def coerce_binary(series: pd.Series, *, success_value: Any) -> tuple[pd.Series, 
 def check_binary_values(series: pd.Series, *, success_value: Any) -> AssumptionCheck:
     raw = series.dropna()
     unique_vals = set(raw.unique().tolist())
-    passed = unique_vals.issubset({0, 1, True, False, success_value})
+    passed = success_value in unique_vals and 1 <= len(unique_vals) <= 2
     return AssumptionCheck(
         name="binary_metric_validity",
         passed=passed,
@@ -182,8 +193,11 @@ def check_binary_values(series: pd.Series, *, success_value: Any) -> AssumptionC
 
 
 def check_expected_counts(observed: pd.DataFrame) -> tuple[AssumptionCheck, pd.DataFrame]:
-    stat, p_value, dof, expected = stats.chi2_contingency(observed.to_numpy())
-    expected_df = pd.DataFrame(expected, index=observed.index, columns=observed.columns)
+    stat_raw, p_raw, dof_raw, expected = stats.chi2_contingency(observed.to_numpy())
+    stat, p_value, dof = _scalar_float(stat_raw), _scalar_float(p_raw), int(dof_raw)
+    expected_df = pd.DataFrame(np.asarray(expected, dtype=float))
+    expected_df.index = observed.index
+    expected_df.columns = observed.columns
     min_expected = float(expected_df.min().min()) if not expected_df.empty else 0.0
     passed = min_expected >= 5.0
     detail = (

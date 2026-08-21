@@ -61,6 +61,10 @@ def test_planner_fallback_builds_core_tasks(tmp_path, sample_df: pd.DataFrame, p
     assert any(t["type"] == "groupby_agg" and t["params"].get("group_by") == "country" for t in tasks)
     assert any(t["type"] == "kpi_template_apply" for t in tasks)
     assert any(t["type"] == "segment_analysis" for t in tasks)
+    assert any(t["type"] == "gap_decomposition" for t in tasks)
+    semantic_keys = [t["provenance"]["semantic_key"] for t in tasks]
+    assert len(semantic_keys) == len(set(semantic_keys))
+    assert plan["task_budget"]["planned_tasks"] <= plan["task_budget"]["max_tasks"]
     store = ctx["store"]
     assert store.path("analysis_tasks.json").exists()
 

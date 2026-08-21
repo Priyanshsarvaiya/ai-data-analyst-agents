@@ -23,7 +23,9 @@ def infer_column_profiles(df: pd.DataFrame, max_examples: int = 5) -> List[Dict[
         n_missing = int(s.isna().sum())
         missing_frac = float(s.isna().mean()) if len(df) else 0.0
         n_unique = int(s.nunique(dropna=True))
-        examples = s.dropna().astype(str).head(max_examples).tolist()
+        # Representative values must be distinct. Taking the first rows can hide
+        # a second experiment arm when a CSV is ordered by group.
+        examples = s.dropna().astype(str).drop_duplicates().head(max_examples).tolist()
 
         numeric_summary = None
         if pd.api.types.is_numeric_dtype(s):

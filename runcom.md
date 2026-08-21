@@ -14,9 +14,11 @@ Install dependencies:
 
 `pip install -r requirements.txt`
 
-## 2) Run Streamlit App
+## 2) Run Flask App
 
-`streamlit run app/streamlit_app.py`
+The web interface is a Flask application:
+
+`venv/bin/python -m flask --app app.flask_app:create_app run --debug`
 
 Optional auth hardening env vars:
 
@@ -26,7 +28,7 @@ Optional auth hardening env vars:
 
 `export MAX_UPLOAD_MB=50`
 
-Postgres auth DB connection (used by Streamlit login/signup):
+Postgres connection used by Flask authentication and run tracking:
 
 `export AUTH_DATABASE_URL="postgresql+psycopg://ai_analyst_app:change-this-strong-password@localhost:5432/ai_analyst"`
 
