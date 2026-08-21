@@ -5,10 +5,13 @@ runtime:
 
 llm:
   provider: openrouter
-  model: openai/gpt-5-mini
+  model: z-ai/glm-5.2
   temperature: 0.2
-  max_tokens: 8192
+  max_tokens: 16384
+  planner_max_tokens: 8192
+  report_max_tokens: 16384
   timeout_s: 60
+  max_attempts: 4
 
 qa:
   missingness_warn_threshold: 0.2
@@ -30,3 +33,7 @@ security:
   allow_raw_rows_to_llm: false
   max_rows_to_llm: 25
   user_error_max_chars: 400
+
+planning:
+  next_steps_task_budget: 6
+  max_report_revisions: 1

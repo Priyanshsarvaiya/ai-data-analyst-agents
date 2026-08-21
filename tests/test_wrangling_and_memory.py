@@ -37,3 +37,14 @@ def test_shared_memory_is_isolated() -> None:
     assert m2.get("x") is None
     assert len(m1.messages) == 1
     assert len(m2.messages) == 0
+
+
+def test_shared_memory_tracks_agent_reads_and_writes() -> None:
+    memory = SharedMemory()
+    with memory.as_actor("planner"):
+        memory.get("result.profiling", {})
+        memory.set("result.planner", {"tasks": []})
+
+    audit = memory.audit()
+    assert audit["actors"]["planner"]["read"]["result.profiling"] == 1
+    assert audit["actors"]["planner"]["write"]["result.planner"] == 1

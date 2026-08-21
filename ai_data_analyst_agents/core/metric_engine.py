@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 import ast
 import operator as op
 
@@ -10,11 +10,18 @@ import pandas as pd
 from ai_data_analyst_agents.core.kpi_templates import KPI_TEMPLATE_LIBRARY
 
 
+def _normalized_name(value: str) -> str:
+    return "_".join(part for part in "".join(ch.lower() if ch.isalnum() else " " for ch in str(value)).split())
+
+
 def _pick_column(candidates: List[str], columns: List[str]) -> str | None:
-    colset = set(columns)
+    normalized = {_normalized_name(col): str(col) for col in columns}
     for c in candidates:
-        if c in colset:
+        if c == "__rows__":
             return c
+        match = normalized.get(_normalized_name(c))
+        if match is not None:
+            return match
     return None
 
 
@@ -27,6 +34,8 @@ def _safe_agg(series: pd.Series, agg: str) -> float:
         return float(s.mean())
     if agg == "count":
         return float(series.count())
+    if agg == "nunique":
+        return float(series.nunique(dropna=True))
     if agg == "min":
         return float(s.min())
     if agg == "max":
@@ -67,6 +76,8 @@ def _safe_eval_expr(expr: str, vars_map: Dict[str, float]) -> float:
             right = _eval(node.right)
             if isinstance(node.op, ast.Div) and right == 0:
                 return float("nan")
+            if isinstance(node.op, ast.Pow) and abs(right) > 10:
+                raise ValueError("Expression exponent is outside the allowed range [-10, 10]")
             return float(allowed_bin[type(node.op)](left, right))
         if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_unary:
             return float(allowed_unary[type(node.op)](_eval(node.operand)))
@@ -74,6 +85,46 @@ def _safe_eval_expr(expr: str, vars_map: Dict[str, float]) -> float:
 
     tree = ast.parse(expr, mode="eval")
     return _eval(tree)
+
+
+def _safe_eval_series_expr(expr: str, df: pd.DataFrame) -> pd.Series:
+    """Evaluate column arithmetic without pandas/python expression execution."""
+    allowed_bin = {
+        ast.Add: op.add,
+        ast.Sub: op.sub,
+        ast.Mult: op.mul,
+        ast.Div: op.truediv,
+        ast.Pow: op.pow,
+    }
+    allowed_unary = {ast.UAdd: op.pos, ast.USub: op.neg}
+
+    def _eval(node: ast.AST) -> pd.Series | float:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.Name):
+            if node.id not in df.columns:
+                raise ValueError(f"Unknown column in expression: {node.id}")
+            return cast(pd.Series, pd.to_numeric(df[node.id], errors="coerce"))
+        if isinstance(node, ast.BinOp) and type(node.op) in allowed_bin:
+            left = _eval(node.left)
+            right = _eval(node.right)
+            if isinstance(node.op, ast.Pow) and isinstance(right, float) and abs(right) > 10:
+                raise ValueError("Expression exponent is outside the allowed range [-10, 10]")
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                result = allowed_bin[type(node.op)](left, right)
+            if isinstance(result, pd.Series):
+                return result.replace([np.inf, -np.inf], np.nan)
+            return float(result) if np.isfinite(result) else float("nan")
+        if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_unary:
+            return allowed_unary[type(node.op)](_eval(node.operand))
+        raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+    result = _eval(ast.parse(expr, mode="eval"))
+    if isinstance(result, pd.Series):
+        return result
+    return pd.Series([result] * len(df), index=df.index, dtype=float)
 
 
 def compute_template_kpis(df: pd.DataFrame, domain: str) -> Dict[str, Any]:
@@ -86,9 +137,10 @@ def compute_template_kpis(df: pd.DataFrame, domain: str) -> Dict[str, Any]:
         "resolved_columns": {},
         "kpis": {},
         "derived_kpis": {},
+        "metric_metadata": {},
     }
 
-    cols = df.columns.tolist()
+    cols = [str(col) for col in df.columns]
     base_vals: Dict[str, float] = {}
     for metric_def in spec.get("metric_defs", []):
         name = str(metric_def.get("name"))
@@ -100,9 +152,11 @@ def compute_template_kpis(df: pd.DataFrame, domain: str) -> Dict[str, Any]:
         if col is None:
             out["kpis"][name] = None
             continue
-        val = _safe_agg(df[col], agg)
+        source = pd.Series(range(len(df)), index=df.index) if col == "__rows__" else cast(pd.Series, df[col])
+        val = _safe_agg(source, agg)
         out["kpis"][name] = val
         base_vals[name] = val
+        out["metric_metadata"][name] = {"column": col, "aggregation": agg}
 
     for d in spec.get("derived_defs", []):
         name = str(d.get("name", "")).strip()
@@ -115,8 +169,18 @@ def compute_template_kpis(df: pd.DataFrame, domain: str) -> Dict[str, Any]:
                 out["derived_kpis"][name] = float(val)
             else:
                 out["derived_kpis"][name] = None
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError):
             out["derived_kpis"][name] = None
+
+    metric_names = [str(item.get("name", "")) for item in spec.get("metric_defs", []) if item.get("name")]
+    resolved_names = [name for name in metric_names if out["kpis"].get(name) is not None]
+    out["coverage"] = {
+        "resolved_metrics": resolved_names,
+        "missing_metrics": [name for name in metric_names if name not in resolved_names],
+        "resolved_count": len(resolved_names),
+        "defined_count": len(metric_names),
+        "coverage_ratio": len(resolved_names) / len(metric_names) if metric_names else 0.0,
+    }
 
     return out
 
@@ -138,15 +202,14 @@ def compute_metric_definition(df: pd.DataFrame, params: Dict[str, Any]) -> Dict[
 
     if expression:
         expr = str(expression)
+        evaluated = _safe_eval_series_expr(expr, df)
         if group_by:
             if str(group_by) not in df.columns:
                 raise ValueError(f"group_by column not found: {group_by}")
-            grp = df.groupby(str(group_by)).apply(
-                lambda x: pd.to_numeric(x.eval(expr), errors="coerce").mean()
-            )
+            grp = evaluated.groupby(df[str(group_by)]).mean()
             payload["values"] = {str(k): float(v) for k, v in grp.dropna().to_dict().items()}
         else:
-            val = pd.to_numeric(df.eval(expr), errors="coerce").mean()
+            val = evaluated.mean()
             payload["value"] = float(val)
         return payload
 
@@ -182,11 +245,12 @@ def compute_segment_profile(
     res = df.groupby(segment_by)[metric].agg(agg).sort_values(ascending=False)
     if limit > 0:
         res = res.head(limit)
-    total = float(res.sum()) if len(res) else 0.0
+    additive = str(agg).lower() in {"sum", "count"}
+    total = float(res.sum()) if len(res) and additive else None
     rows = []
     for key, val in res.to_dict().items():
         fval = float(val)
-        share = (fval / total) if total else 0.0
+        share = (fval / total) if additive and total else (0.0 if additive else None)
         rows.append({"segment": str(key), "value": fval, "share_pct": share})
 
     return {

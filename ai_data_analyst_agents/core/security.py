@@ -31,25 +31,77 @@ _SQL_DENY_KEYWORDS = {
 }
 
 
-def _strip_sql_comments(sql: str) -> str:
-    s = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
-    s = re.sub(r"--[^\n\r]*", " ", s)
-    return s
+def _mask_sql_literals_and_comments(sql: str) -> str:
+    """Mask quoted content/comments while preserving statement structure."""
+    chars = list(sql)
+    i = 0
+    state: str | None = None
+    while i < len(chars):
+        ch = chars[i]
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+        if state == "line_comment":
+            if ch in "\r\n":
+                state = None
+            else:
+                chars[i] = " "
+            i += 1
+            continue
+        if state == "block_comment":
+            chars[i] = " "
+            if ch == "*" and nxt == "/":
+                chars[i + 1] = " "
+                state = None
+                i += 2
+            else:
+                i += 1
+            continue
+        if state in {"single", "double"}:
+            quote = "'" if state == "single" else '"'
+            chars[i] = " "
+            if ch == quote:
+                if nxt == quote:
+                    chars[i + 1] = " "
+                    i += 2
+                    continue
+                state = None
+            i += 1
+            continue
+        if ch == "-" and nxt == "-":
+            chars[i] = chars[i + 1] = " "
+            state = "line_comment"
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            chars[i] = chars[i + 1] = " "
+            state = "block_comment"
+            i += 2
+            continue
+        if ch == "'":
+            chars[i] = " "
+            state = "single"
+        elif ch == '"':
+            chars[i] = " "
+            state = "double"
+        i += 1
+    if state in {"single", "double", "block_comment"}:
+        raise ValueError("Unterminated SQL string, identifier, or block comment.")
+    return "".join(chars)
 
 
 def validate_read_only_sql(query: str) -> str:
-    q = _strip_sql_comments((query or "")).strip()
+    q = (query or "").strip()
     if not q:
         raise ValueError("Empty SQL query.")
     q = q.rstrip(";").strip()
     if not q:
         raise ValueError("Empty SQL query.")
 
-    # Keep execution single-statement.
-    if ";" in q:
+    masked = _mask_sql_literals_and_comments(q)
+    # Keep execution single-statement, without treating semicolons inside strings as separators.
+    if ";" in masked:
         raise ValueError("Only single-statement read-only SQL is allowed.")
 
-    q_lc = q.lower()
+    q_lc = masked.lower().strip()
     if not (q_lc.startswith("select") or q_lc.startswith("with ")):
         raise ValueError("Only SELECT/CTE read-only SQL is allowed.")
 

@@ -54,7 +54,25 @@ class EDAAgent(Agent):
             title = artifact.replace(".json", "")
             task_id = str(item.get("task_id", "t"))
 
-            if isinstance(payload, dict) and "filter" in payload and "value" in payload:
+            if isinstance(payload, dict) and payload.get("analysis_type") == "gap_decomposition":
+                effects = payload.get("effects", {}) or {}
+                try:
+                    chart_name = save_bar_from_mapping(
+                        {
+                            "Row volume": float(effects.get("row_volume_effect", 0)),
+                            "Average value": float(effects.get("average_value_effect", 0)),
+                        },
+                        charts_dir,
+                        f"qa_gap_decomposition_{task_id}",
+                        f"Observed {payload.get('metric', 'metric')} gap contributions",
+                        xlabel="contribution to observed gap",
+                        ylabel="effect",
+                        top_k=2,
+                    )
+                except Exception:
+                    chart_name = None
+
+            elif isinstance(payload, dict) and "filter" in payload and "value" in payload:
                 f = payload.get("filter", {})
                 if isinstance(f, dict) and len(f) == 1:
                     k = next(iter(f.keys()))

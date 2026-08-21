@@ -52,6 +52,11 @@ def range_sanity_checks(df: pd.DataFrame) -> List[str]:
         if "age" in lc and pd.api.types.is_numeric_dtype(df[col]):
             if (df[col].dropna() < 0).any():
                 warnings.append(f"Column '{col}' looks like age but has negative values.")
+        nonnegative_tokens = ("revenue", "sales", "quantity", "unit_price", "price", "amount", "units")
+        if any(tok in lc for tok in nonnegative_tokens) and pd.api.types.is_numeric_dtype(df[col]):
+            negative_count = int((df[col].dropna() < 0).sum())
+            if negative_count:
+                warnings.append(f"Column '{col}' has {negative_count} negative value(s) but appears non-negative.")
 
     return warnings
 
@@ -67,6 +72,16 @@ def build_quality_report(
     dup = duplicate_rate(df)
     outliers = outlier_report_zscore(df, z_thresh=outlier_z_threshold)
     sanity = range_sanity_checks(df)
+    constant_columns = [str(c) for c in df.columns if int(df[c].nunique(dropna=False)) <= 1]
+    identifier_integrity: Dict[str, Any] = {}
+    for col in df.columns:
+        lc = str(col).lower()
+        if lc == "id" or lc.endswith("_id"):
+            identifier_integrity[str(col)] = {
+                "missing_rate": float(df[col].isna().mean()) if len(df) else 0.0,
+                "duplicate_rate_nonnull": float(df[col].dropna().duplicated().mean()) if df[col].notna().any() else 0.0,
+                "unique_count": int(df[col].nunique(dropna=True)),
+            }
 
     warnings: List[str] = []
 
@@ -89,5 +104,7 @@ def build_quality_report(
         "missingness": miss,
         "duplicate_rate": dup,
         "outliers_zscore": outliers,
+        "constant_columns": constant_columns,
+        "identifier_integrity": identifier_integrity,
         "warnings": warnings,
     }

@@ -6,16 +6,10 @@ from collections import deque
 import re
 
 import pandas as pd
-from ai_data_analyst_agents.core.security import clamp_positive_limit, validate_read_only_sql
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
 
-try:
-    from sqlalchemy import create_engine, inspect, text
-    from sqlalchemy.engine import Engine
-except Exception:  # pragma: no cover - optional dependency path
-    create_engine = None
-    inspect = None
-    text = None
-    Engine = Any  # type: ignore[misc,assignment]
+from ai_data_analyst_agents.core.security import clamp_positive_limit, validate_read_only_sql
 
 
 def _quote_ident(engine: Engine, name: str) -> str:
@@ -46,24 +40,19 @@ class SQLDataSource:
     enforce_read_only_sql: bool = True
 
     def __post_init__(self) -> None:
-        if create_engine is None:
-            raise ImportError(
-                "sqlalchemy is required for SQL data sources. Install with `pip install sqlalchemy psycopg[binary]`."
-            )
         self.engine = create_engine(self.db_url, pool_pre_ping=True, pool_recycle=3600)
 
     def _apply_session_safety(self, conn: Any) -> None:
+        dialect = str(self.engine.dialect.name).lower()
         try:
-            dialect = str(self.engine.dialect.name).lower()
             if dialect == "sqlite":
                 conn.execute(text("PRAGMA query_only = ON"))
             elif dialect.startswith("postgresql"):
                 timeout_ms = max(1000, int(self.timeout_s * 1000))
                 conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
                 conn.execute(text("SET LOCAL default_transaction_read_only = on"))
-        except Exception:
-            # Best effort hardening; query-level validation still blocks write SQL.
-            pass
+        except Exception as exc:
+            raise RuntimeError(f"Could not enforce read-only session safety for dialect '{dialect}'.") from exc
 
     def inspect_schema(
         self,
@@ -349,13 +338,17 @@ def build_groupby_query(
         )
 
     agg_fn = (agg or "sum").lower().strip()
-    if agg_fn not in {"sum", "mean", "avg", "count", "min", "max", "median"}:
-        agg_fn = "sum"
+    if agg_fn not in {"sum", "mean", "avg", "count", "nunique", "min", "max"}:
+        raise ValueError(f"Unsupported portable SQL aggregation: {agg}")
     if agg_fn == "mean":
         agg_fn = "avg"
 
     q_metric = f"{aliases[fact_table]}.{_quote_ident(engine, metric_col)}"
-    value_expr = f"{agg_fn.upper()}({q_metric}) AS value"
+    value_expr = (
+        f"COUNT(DISTINCT {q_metric}) AS value"
+        if agg_fn == "nunique"
+        else f"{agg_fn.upper()}({q_metric}) AS value"
+    )
 
     dim_selects: List[str] = []
     dim_groups: List[str] = []

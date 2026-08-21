@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic_settings import SettingsConfigDict
 from pydantic_settings import BaseSettings
 
 
@@ -15,11 +16,16 @@ class RuntimeCfg(BaseModel):
 
 
 class LlmCfg(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+
     provider: str = "openrouter"
     model: str = "z-ai/glm-5"
     temperature: float = 0.2
-    max_tokens: int = 1200
-    timeout_s: int = 60
+    max_tokens: int = Field(default=16384, ge=256, le=65536, description="Legacy shared output budget")
+    planner_max_tokens: int = Field(default=8192, ge=512, le=32768)
+    report_max_tokens: int = Field(default=16384, ge=1024, le=65536)
+    timeout_s: int = Field(default=60, ge=5, le=600)
+    max_attempts: int = Field(default=4, ge=1, le=8)
 
 
 class QACfg(BaseModel):
@@ -47,6 +53,11 @@ class SecurityCfg(BaseModel):
     user_error_max_chars: int = 400
 
 
+class PlanningCfg(BaseModel):
+    next_steps_task_budget: int = 6
+    max_report_revisions: int = 1
+
+
 class AppCfg(BaseModel):
     runtime: RuntimeCfg = Field(default_factory=RuntimeCfg)
     llm: LlmCfg = Field(default_factory=LlmCfg)
@@ -54,9 +65,11 @@ class AppCfg(BaseModel):
     eda: EDACfg = Field(default_factory=EDACfg)
     sql: SQLCfg = Field(default_factory=SQLCfg)
     security: SecurityCfg = Field(default_factory=SecurityCfg)
+    planning: PlanningCfg = Field(default_factory=PlanningCfg)
 
 
 class EnvSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = "z-ai/glm-5"
     OPENROUTER_SITE_URL: Optional[str] = None
@@ -72,11 +85,9 @@ class EnvSettings(BaseSettings):
     SECURITY_ALLOW_RAW_ROWS_TO_LLM: Optional[bool] = None
     SECURITY_MAX_ROWS_TO_LLM: Optional[int] = None
     SECURITY_USER_ERROR_MAX_CHARS: Optional[int] = None
-
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
-
+    LLM_PLANNER_MAX_TOKENS: Optional[int] = None
+    LLM_REPORT_MAX_TOKENS: Optional[int] = None
+    LLM_MAX_ATTEMPTS: Optional[int] = None
 
 def load_app_cfg(path: str | Path = "configs/settings.yaml") -> AppCfg:
     p = Path(path)
@@ -90,6 +101,12 @@ def load_app_cfg(path: str | Path = "configs/settings.yaml") -> AppCfg:
     cfg.runtime.artifacts_dir = env.ARTIFACTS_DIR or cfg.runtime.artifacts_dir
     cfg.runtime.log_level = env.LOG_LEVEL or cfg.runtime.log_level
     cfg.llm.model = env.OPENROUTER_MODEL or cfg.llm.model
+    if env.LLM_PLANNER_MAX_TOKENS is not None:
+        cfg.llm.planner_max_tokens = int(env.LLM_PLANNER_MAX_TOKENS)
+    if env.LLM_REPORT_MAX_TOKENS is not None:
+        cfg.llm.report_max_tokens = int(env.LLM_REPORT_MAX_TOKENS)
+    if env.LLM_MAX_ATTEMPTS is not None:
+        cfg.llm.max_attempts = int(env.LLM_MAX_ATTEMPTS)
     if env.SQL_DEFAULT_QUERY_ROW_LIMIT is not None:
         cfg.sql.default_query_row_limit = int(env.SQL_DEFAULT_QUERY_ROW_LIMIT)
     if env.SQL_INTROSPECTION_MAX_TABLES is not None:

@@ -14,9 +14,11 @@ Install dependencies:
 
 `pip install -r requirements.txt`
 
-## 2) Run Streamlit App
+## 2) Run Flask App
 
-`streamlit run app/streamlit_app.py`
+The web interface is a Flask application:
+
+`venv/bin/python -m flask --app app.flask_app:create_app run --debug`
 
 Optional auth hardening env vars:
 
@@ -26,7 +28,7 @@ Optional auth hardening env vars:
 
 `export MAX_UPLOAD_MB=50`
 
-Postgres auth DB connection (used by Streamlit login/signup):
+Postgres connection used by Flask authentication and run tracking:
 
 `export AUTH_DATABASE_URL="postgresql+psycopg://your_db_user:your_db_password@localhost:5432/your_db_name"`
 
@@ -75,3 +77,14 @@ Run all tests:
 Run a single test file:
 
 `pytest -q tests/test_pipeline_csv_e2e.py`
+
+
+Need to do this if folder change:
+`deactivate 2>/dev/null`
+`rm -rf venv`
+`python3 -m venv venv`
+`source venv/bin/activate`
+`which python`
+`which pip`
+`python -m pip install --upgrade pip`
+`python -m pip install -r requirements.txt`

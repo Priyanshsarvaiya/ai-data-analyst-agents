@@ -33,6 +33,9 @@ def test_orchestrator_runs_tasks_and_persists_results(tmp_path) -> None:
     assert set(out.keys()) == {"intake", "profiling"}
     assert memory.get("result.intake")["value"] == 1
     assert memory.get("result.profiling")["value"] == 2
+    audit = memory.audit()
+    assert audit["actors"]["intake"]["write"]["result.intake"] == 1
+    assert audit["actors"]["profiling"]["write"]["result.profiling"] == 1
 
     # For each task: start + done
     assert len(memory.messages) == 4

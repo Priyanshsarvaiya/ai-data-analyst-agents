@@ -1,0 +1,9 @@
+{
+  "include": ["ai_data_analyst_agents", "app"],
+  "exclude": ["artifacts", "data", "tests", "venv"],
+  "typeCheckingMode": "standard",
+  "reportArgumentType": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportCallIssue": "none",
+  "reportGeneralTypeIssues": "none"
+}

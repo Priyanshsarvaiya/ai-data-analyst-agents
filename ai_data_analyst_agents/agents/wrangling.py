@@ -17,8 +17,26 @@ class WranglingAgent(Agent):
         after = len(clean)
 
         feature_log = {
-            "steps": [{"action": "drop_duplicates", "before_rows": before, "after_rows": after}]
+            "steps": [
+                {
+                    "action": "drop_duplicates",
+                    "before_rows": before,
+                    "after_rows": after,
+                    "rows_removed": before - after,
+                }
+            ]
         }
+        profile = ctx["memory"].get("result.profiling") or {}
+        for col in profile.get("datetime_candidates", []) or []:
+            if col not in clean.columns:
+                continue
+            parsed = pd.to_datetime(clean[col], errors="coerce")
+            valid_rate = float(parsed.notna().mean()) if len(parsed) else 0.0
+            if valid_rate >= 0.8:
+                clean[col] = parsed
+                feature_log["steps"].append(
+                    {"action": "parse_datetime", "column": str(col), "valid_rate": valid_rate}
+                )
 
         clean.to_csv(store.path("cleaned.csv"), index=False)
         store.register_file("cleaned.csv")

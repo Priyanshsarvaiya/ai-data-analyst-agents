@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 import pandas as pd
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.contracts import (
+    ARTIFACT_SCHEMA_VERSION,
+    validate_metrics_outputs_contract,
+)
 from ai_data_analyst_agents.core.kpi_templates import detect_business_domain, pick_template_dimension
+from ai_data_analyst_agents.core.kpi_templates import (
+    default_agg_for_metric,
+)
+from ai_data_analyst_agents.core.metric_semantics import (
+    build_metric_registry_snapshot,
+    validate_metric_request,
+)
 from ai_data_analyst_agents.core.metric_engine import (
     compute_cohort_retention,
     compute_metric_definition,
@@ -45,6 +56,7 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     - recency_by_group: {group_by, date_col}
     - topk: {by, metric, agg?, k?}
     - timeseries_agg: {date_col, metric, freq?, agg?}
+    - gap_decomposition: {segment_by, metric, focus_segment?}
     - statistical_test: {group_col, metric, group_a?, group_b?, compare_to_rest?, paired?, pair_id_col?, success_value?, alpha?, alternative?}
     - ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?}
     - ols_regression: {target, predictors, alpha?}
@@ -60,7 +72,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "sum_col", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "limit" not in p:
             p["limit"] = _first_present(p, ["limit", "top_k", "topk", "k"]) or 50
 
@@ -82,7 +95,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "limit" not in p:
             p["limit"] = _first_present(p, ["limit", "top_k", "topk", "k"]) or 100
 
@@ -109,9 +123,18 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "quantiles" not in p or not isinstance(p.get("quantiles"), list):
             p["quantiles"] = [0.5, 0.75, 0.9, 0.95, 0.99]
+
+    elif ttype == "gap_decomposition":
+        if "segment_by" not in p:
+            p["segment_by"] = _first_present(p, ["segment_by", "group_by", "dimension", "by"])
+        if "metric" not in p:
+            p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y"])
+        if "focus_segment" not in p:
+            p["focus_segment"] = _first_present(p, ["focus_segment", "focus_group", "target_segment"])
 
     elif ttype == "recency_by_group":
         if "group_by" not in p:
@@ -125,7 +148,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "value", "measure", "target", "y", "metric_col"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "k" not in p:
             p["k"] = _first_present(p, ["k", "top_k", "topk", "limit"]) or 10
         try:
@@ -141,7 +165,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "freq" not in p:
             p["freq"] = _first_present(p, ["freq", "granularity", "period"]) or "M"
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
 
     elif ttype == "filter_agg":
         # ✅ Handle nested where dict produced by some planners:
@@ -186,7 +211,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 ["metric", "measure", "target", "metric_col", "value_col", "y", "value_metric"]
             )
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
 
     elif ttype == "sql_query":
         if "query" not in p:
@@ -222,7 +248,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "group_by" not in p:
             p["group_by"] = _first_present(p, ["group_by", "segment_by", "dimension", "by"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric_col") or "metric"), preferred=str(proposed) if proposed else None)
 
     elif ttype == "segment_analysis":
         if "segment_by" not in p:
@@ -230,7 +257,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         if "metric" not in p:
             p["metric"] = _first_present(p, ["metric", "metric_col", "value", "measure"])
         if "agg" not in p:
-            p["agg"] = _first_present(p, ["agg", "aggregation", "op"]) or "sum"
+            proposed = _first_present(p, ["agg", "aggregation", "op"])
+            p["agg"] = default_agg_for_metric(str(p.get("metric") or "metric"), preferred=str(proposed) if proposed else None)
         if "limit" not in p:
             p["limit"] = _first_present(p, ["limit", "top_k", "k"]) or 100
         try:
@@ -261,6 +289,8 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             p["alpha"] = _first_present(p, ["alpha", "significance_level"]) or 0.05
         if "alternative" not in p:
             p["alternative"] = _first_present(p, ["alternative"]) or "two-sided"
+        if str(p["alternative"]) not in {"two-sided", "less", "greater"}:
+            p["alternative"] = "two-sided"
         p["compare_to_rest"] = bool(p.get("compare_to_rest", False))
         p["paired"] = bool(p.get("paired", False))
 
@@ -277,6 +307,12 @@ def _normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             p["metric_type"] = _first_present(p, ["metric_type", "outcome_type"]) or "auto"
         if "alpha" not in p:
             p["alpha"] = _first_present(p, ["alpha", "significance_level"]) or 0.05
+        if str(p["metric_type"]) not in {"auto", "binary", "continuous"}:
+            p["metric_type"] = "auto"
+        if "alternative" not in p:
+            p["alternative"] = _first_present(p, ["alternative"]) or "two-sided"
+        if str(p["alternative"]) not in {"two-sided", "less", "greater"}:
+            p["alternative"] = "two-sided"
 
     elif ttype == "ols_regression":
         if "target" not in p:
@@ -316,8 +352,8 @@ def _ensure_col(df: pd.DataFrame, col: str) -> None:
 
 def _safe_agg(series: pd.Series, agg: str) -> float:
     agg = (agg or "sum").lower().strip()
-    if agg not in {"sum", "mean", "min", "max", "median", "count"}:
-        raise ValueError(f"Unsupported agg '{agg}'. Use one of sum/mean/min/max/median/count.")
+    if agg not in {"sum", "mean", "min", "max", "median", "count", "nunique"}:
+        raise ValueError(f"Unsupported agg '{agg}'. Use one of sum/mean/min/max/median/count/nunique.")
 
     if agg == "sum":
         return float(series.sum())
@@ -331,9 +367,229 @@ def _safe_agg(series: pd.Series, agg: str) -> float:
         return float(series.median())
     if agg == "count":
         return float(series.count())
+    if agg == "nunique":
+        return float(series.nunique(dropna=True))
+    raise AssertionError(f"Unhandled aggregation: {agg}")
 
     # unreachable
     return float(series.sum())
+
+
+def _compute_gap_decomposition(
+    df: pd.DataFrame,
+    *,
+    segment_by: str,
+    metric: str,
+    focus_segment: str | None,
+    question: str,
+) -> Dict[str, Any]:
+    """Exact two-factor decomposition: total = row volume * average value."""
+    _ensure_col(df, segment_by)
+    _ensure_col(df, metric)
+    work = df[[segment_by, metric]].copy()
+    work[metric] = pd.to_numeric(work[metric], errors="coerce")
+    work = work.dropna(subset=[segment_by, metric])
+    if work.empty:
+        raise ValueError(f"No usable rows for gap decomposition ({segment_by}, {metric}).")
+
+    grouped = work.groupby(segment_by, dropna=False)[metric].agg(["sum", "count", "mean"])
+    grouped = grouped.sort_values("sum", ascending=False)
+    labels = [str(x) for x in grouped.index.tolist()]
+    chosen = str(focus_segment).strip() if focus_segment is not None else ""
+    if not chosen:
+        q = (question or "").lower()
+        chosen = next((label for label in labels if label.lower() in q), labels[-1])
+    label_lookup = {str(x): x for x in grouped.index.tolist()}
+    if chosen not in label_lookup:
+        raise ValueError(f"Focus segment '{chosen}' not found in {segment_by}.")
+
+    focus_key = label_lookup[chosen]
+    benchmark_key = next((x for x in grouped.index.tolist() if x != focus_key), focus_key)
+    focus = grouped.loc[focus_key]
+    benchmark = grouped.loc[benchmark_key]
+    focus_total = float(focus["sum"])
+    benchmark_total = float(benchmark["sum"])
+    focus_count = int(focus["count"])
+    benchmark_count = int(benchmark["count"])
+    focus_avg = float(focus["mean"])
+    benchmark_avg = float(benchmark["mean"])
+    absolute_gap = benchmark_total - focus_total
+    volume_effect = (benchmark_count - focus_count) * focus_avg
+    value_effect = benchmark_count * (benchmark_avg - focus_avg)
+
+    return {
+        "analysis_type": "gap_decomposition",
+        "identity": f"sum({metric}) = row_count * mean({metric})",
+        "segment_by": segment_by,
+        "metric": metric,
+        "focus_segment": str(focus_key),
+        "benchmark_segment": str(benchmark_key),
+        "focus_total": focus_total,
+        "benchmark_total": benchmark_total,
+        "absolute_gap": absolute_gap,
+        "focus_relationship": "trails" if absolute_gap > 0 else ("leads" if absolute_gap < 0 else "equals"),
+        "relative_gap_pct": (absolute_gap / benchmark_total * 100.0) if benchmark_total else None,
+        "focus_row_count": focus_count,
+        "benchmark_row_count": benchmark_count,
+        "focus_average_value": focus_avg,
+        "benchmark_average_value": benchmark_avg,
+        "effects": {
+            "row_volume_effect": float(volume_effect),
+            "average_value_effect": float(value_effect),
+            "reconciliation_total": float(volume_effect + value_effect),
+        },
+        "interpretation_guardrail": (
+            "This is an arithmetic contribution decomposition of an observed gap, not evidence of causality."
+        ),
+    }
+
+
+def _metric_and_agg_for_task(ttype: str, params: Dict[str, Any]) -> tuple[str | None, str | None]:
+    p = params or {}
+    if ttype in {
+        "groupby_agg",
+        "groupby2_agg",
+        "filter_agg",
+        "group_distribution",
+        "topk",
+        "timeseries_agg",
+        "segment_analysis",
+        "gap_decomposition",
+    }:
+        metric = p.get("metric")
+        if ttype == "gap_decomposition":
+            return (str(metric), "sum") if metric is not None else (None, "sum")
+        agg = p.get("agg", "sum")
+        return (str(metric), str(agg)) if metric is not None else (None, str(agg))
+
+    if ttype == "metric_definition":
+        metric_col = p.get("metric_col")
+        if metric_col is not None:
+            return str(metric_col), str(p.get("agg", "sum"))
+        return None, None
+
+    return None, None
+
+
+def _validate_metric_semantics(
+    ttype: str,
+    params: Dict[str, Any],
+    *,
+    planning_contract: Dict[str, Any] | None,
+    available_columns: List[str],
+) -> tuple[bool, str | None]:
+    metric, agg = _metric_and_agg_for_task(ttype, params)
+    if not metric or not agg:
+        return True, None
+    aggregation_level = str((planning_contract or {}).get("aggregation_level") or "")
+    ok, reason, _ = validate_metric_request(
+        metric_name=metric,
+        agg=agg,
+        aggregation_level=aggregation_level,
+        available_columns=available_columns,
+    )
+    if ok:
+        return True, None
+    return False, reason or f"Invalid metric semantics: agg '{agg}' is not allowed for metric '{metric}'."
+
+
+def _guess_focus_group(question: str, groups: List[str]) -> str | None:
+    q = (question or "").lower()
+    for g in groups:
+        if str(g).strip().lower() in q:
+            return str(g)
+    return None
+
+
+def _autoresolve_statistical_test_params(
+    df: pd.DataFrame,
+    params: Dict[str, Any],
+    *,
+    question: str,
+    min_group_n: int = 5,
+) -> tuple[Dict[str, Any], str | None]:
+    p = dict(params or {})
+    group_col = str(p.get("group_col", ""))
+    metric = str(p.get("metric", ""))
+    if not group_col or not metric:
+        return p, "Missing required statistical parameters (group_col/metric)."
+    if group_col not in df.columns or metric not in df.columns:
+        return p, None
+
+    dff = df.dropna(subset=[group_col, metric]).copy()
+    if dff.empty:
+        return p, f"No non-null rows available for statistical test using {group_col}/{metric}."
+
+    groups = [str(x) for x in dff[group_col].astype(str).unique().tolist() if str(x).strip()]
+    if len(groups) < 2:
+        return p, f"Need at least two groups in {group_col} for statistical test."
+
+    group_a = str(p.get("group_a")).strip() if p.get("group_a") is not None else None
+    group_b = str(p.get("group_b")).strip() if p.get("group_b") is not None else None
+    compare_to_rest = bool(p.get("compare_to_rest", False))
+
+    if group_a is None:
+        group_a = _guess_focus_group(question, groups) or groups[0]
+
+    if len(groups) == 2 and not compare_to_rest:
+        if group_b is None:
+            group_b = groups[1] if groups[0] == group_a else groups[0]
+    elif len(groups) > 2 and group_b is None and not compare_to_rest:
+        compare_to_rest = True
+
+    if group_a and group_a not in groups:
+        return p, f"Requested group_a '{group_a}' not found in {group_col}."
+    if group_b and group_b not in groups:
+        return p, f"Requested group_b '{group_b}' not found in {group_col}."
+
+    if compare_to_rest:
+        n_a = int((dff[group_col].astype(str) == str(group_a)).sum())
+        n_b = int((dff[group_col].astype(str) != str(group_a)).sum())
+        if n_a < min_group_n or n_b < min_group_n:
+            return p, (
+                f"Insufficient sample size for compare_to_rest ({group_a}={n_a}, rest={n_b}); "
+                f"requires at least {min_group_n} each."
+            )
+    else:
+        if group_b is None:
+            return p, "Both comparison groups must be specified when compare_to_rest is false."
+        n_a = int((dff[group_col].astype(str) == str(group_a)).sum())
+        n_b = int((dff[group_col].astype(str) == str(group_b)).sum())
+        if n_a < min_group_n or n_b < min_group_n:
+            return p, (
+                f"Insufficient sample size for statistical test ({group_a}={n_a}, {group_b}={n_b}); "
+                f"requires at least {min_group_n} each."
+            )
+
+    p["group_a"] = group_a
+    p["group_b"] = group_b
+    p["compare_to_rest"] = compare_to_rest
+    return p, None
+
+
+def _validate_ab_groups(
+    df: pd.DataFrame,
+    params: Dict[str, Any],
+    *,
+    min_group_n: int = 5,
+) -> str | None:
+    p = dict(params or {})
+    group_col = str(p.get("group_col", ""))
+    control = str(p.get("control", ""))
+    treatment = str(p.get("treatment", ""))
+    if not group_col or group_col not in df.columns:
+        return None
+    series = df[group_col].astype(str)
+    n_c = int((series == control).sum())
+    n_t = int((series == treatment).sum())
+    if n_c == 0 or n_t == 0:
+        return f"A/B groups not found in {group_col}: control={control} ({n_c}), treatment={treatment} ({n_t})."
+    if n_c < min_group_n or n_t < min_group_n:
+        return (
+            f"Insufficient A/B sample size in {group_col}: control={n_c}, treatment={n_t}; "
+            f"requires at least {min_group_n} each."
+        )
+    return None
 
 
 class MetricsAgent(Agent):
@@ -350,11 +606,26 @@ class MetricsAgent(Agent):
         df: pd.DataFrame = ctx["memory"].get("df.cleaned", ctx["df"])
         task_plan = ctx["memory"].get("result.planner", {}) or {}
         tasks = task_plan.get("tasks", []) or []
+        planning_contract = task_plan.get("planning_contract", {}) or {}
+        analysis_type = task_plan.get("analysis_type")
 
         outputs: Dict[str, Any] = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "analysis_type": analysis_type,
+            "planning_contract": task_plan.get("planning_contract"),
             "computed": [],
             "failed": [],
             "skipped": [],
+            "semantic_validation": [],
+            "metric_registry": build_metric_registry_snapshot(
+                list(
+                    {
+                        str(t.get("params", {}).get("metric"))
+                        for t in tasks
+                        if isinstance(t.get("params"), dict) and t.get("params", {}).get("metric")
+                    }
+                )
+            ),
         }
 
         for t in tasks:
@@ -372,6 +643,32 @@ class MetricsAgent(Agent):
             logger.info(
                 f"[Metrics] {tid} type={ttype_raw} -> {ttype} | "
                 f"raw_params={raw_params} | normalized_params={p}"
+            )
+
+            valid_semantics, semantic_error = _validate_metric_semantics(
+                ttype,
+                p,
+                planning_contract=planning_contract,
+                available_columns=list(df.columns),
+            )
+            if not valid_semantics:
+                outputs["semantic_validation"].append(
+                    {
+                        "task_id": tid,
+                        "status": "invalid",
+                        "analysis_type": analysis_type,
+                        "reason": semantic_error,
+                        "params": p,
+                    }
+                )
+                outputs["skipped"].append({"task_id": tid, "reason": semantic_error})
+                continue
+            outputs["semantic_validation"].append(
+                {
+                    "task_id": tid,
+                    "status": "ok",
+                    "analysis_type": analysis_type,
+                }
             )
 
             try:
@@ -591,6 +888,30 @@ class MetricsAgent(Agent):
                         summary=f"Distribution of {agg}({metric}) across {group}",
                     )
                     outputs["computed"].append({"task_id": tid, "artifact": artifact, "evidence_id": ev.id})
+
+                elif ttype == "gap_decomposition":
+                    _require_params(tid, ttype, p, ["segment_by", "metric"])
+                    payload = _compute_gap_decomposition(
+                        df,
+                        segment_by=str(p["segment_by"]),
+                        metric=str(p["metric"]),
+                        focus_segment=str(p["focus_segment"]) if p.get("focus_segment") is not None else None,
+                        question=str(ctx.get("business_question", "")),
+                    )
+                    artifact = f"{tid}_gap_decomposition_{p['segment_by']}_{p['metric']}.json"
+                    store.write_json(artifact, payload)
+                    ev = evidence.add(
+                        kind="json",
+                        artifact_path=artifact,
+                        pointer="effects",
+                        summary=(
+                            f"Observed {p['metric']} gap decomposed into row-volume and average-value effects "
+                            f"across {p['segment_by']}"
+                        ),
+                    )
+                    outputs["computed"].append(
+                        {"task_id": tid, "task_type": ttype, "artifact": artifact, "evidence_id": ev.id}
+                    )
 
                 elif ttype == "recency_by_group":
                     _require_params(tid, ttype, p, ["group_by", "date_col"])
@@ -847,6 +1168,14 @@ class MetricsAgent(Agent):
 
                 elif ttype == "statistical_test":
                     _require_params(tid, ttype, p, ["group_col", "metric"])
+                    p, stat_prep_error = _autoresolve_statistical_test_params(
+                        df,
+                        p,
+                        question=str(ctx.get("business_question", "")),
+                    )
+                    if stat_prep_error:
+                        outputs["skipped"].append({"task_id": tid, "reason": stat_prep_error})
+                        continue
                     req = HypothesisTestRequest(
                         group_col=str(p["group_col"]),
                         metric=str(p["metric"]),
@@ -857,7 +1186,10 @@ class MetricsAgent(Agent):
                         pair_id_col=str(p["pair_id_col"]) if p.get("pair_id_col") else None,
                         success_value=p.get("success_value", 1),
                         alpha=float(p.get("alpha", 0.05)),
-                        alternative=str(p.get("alternative", "two-sided")),
+                        alternative=cast(
+                            Literal["two-sided", "less", "greater"],
+                            str(p.get("alternative", "two-sided")),
+                        ),
                     )
                     selection, result = run_hypothesis_test(df, req, analysis_id=tid)
                     bundle = write_statistical_artifacts(store, task_id=tid, result=result)
@@ -881,14 +1213,25 @@ class MetricsAgent(Agent):
 
                 elif ttype == "ab_test":
                     _require_params(tid, ttype, p, ["group_col", "control", "treatment", "metric"])
+                    ab_err = _validate_ab_groups(df, p)
+                    if ab_err:
+                        outputs["skipped"].append({"task_id": tid, "reason": ab_err})
+                        continue
                     req = ABTestRequest(
                         group_col=str(p["group_col"]),
                         control=p["control"],
                         treatment=p["treatment"],
                         metric=str(p["metric"]),
-                        metric_type=str(p.get("metric_type", "auto")),
+                        metric_type=cast(
+                            Literal["auto", "binary", "continuous"],
+                            str(p.get("metric_type", "auto")),
+                        ),
                         success_value=p.get("success_value", 1),
                         alpha=float(p.get("alpha", 0.05)),
+                        alternative=cast(
+                            Literal["two-sided", "less", "greater"],
+                            str(p.get("alternative", "two-sided")),
+                        ),
                     )
                     result = run_ab_test(df, req, analysis_id=tid)
                     bundle = write_statistical_artifacts(store, task_id=tid, result=result)
@@ -954,6 +1297,7 @@ class MetricsAgent(Agent):
                 logger.exception(f"Task {tid} failed")
                 outputs["failed"].append({"task_id": tid, "reason": str(e), "task": t})
 
+        outputs = validate_metrics_outputs_contract(outputs).model_dump()
         store.write_json("metrics_outputs.json", outputs)
         logger.info("Wrote metrics_outputs.json")
         return outputs

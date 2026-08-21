@@ -5,9 +5,16 @@ import json
 import re
 
 from ai_data_analyst_agents.core.agent_base import Agent
+from ai_data_analyst_agents.core.contracts import (
+    ARTIFACT_SCHEMA_VERSION,
+    validate_analysis_tasks_contract,
+)
 from ai_data_analyst_agents.core.kpi_templates import (
+    default_agg_for_metric,
     detect_business_domain,
+    is_agg_allowed_for_metric,
     pick_cohort_columns,
+    score_business_domains,
 )
 from ai_data_analyst_agents.core.openrouter_client import OpenRouterClient
 from ai_data_analyst_agents.core.security import validate_read_only_sql
@@ -32,7 +39,7 @@ JSON OUTPUT SCHEMA
   "tasks": [
     {
       "id": "T1",
-      "type": "groupby_agg" | "groupby2_agg" | "filter_agg" | "correlation" | "distribution" | "group_distribution" | "recency_by_group" | "topk" | "timeseries_agg" | "sql_query" | "sql_join_profile" | "kpi_template_apply" | "metric_definition" | "segment_analysis" | "cohort_analysis" | "statistical_test" | "ab_test" | "ols_regression",
+      "type": "groupby_agg" | "groupby2_agg" | "filter_agg" | "correlation" | "distribution" | "group_distribution" | "recency_by_group" | "topk" | "timeseries_agg" | "sql_query" | "sql_join_profile" | "kpi_template_apply" | "metric_definition" | "segment_analysis" | "gap_decomposition" | "cohort_analysis" | "statistical_test" | "ab_test" | "ols_regression",
       "params": {}
     }
   ],
@@ -56,12 +63,14 @@ TASK PARAM SCHEMAS
 14) segment_analysis: {segment_by, metric, agg?, limit?}
 15) cohort_analysis: {entity_col, date_col, freq?}
 16) statistical_test: {group_col, metric, group_a?, group_b?, compare_to_rest?, paired?, pair_id_col?, success_value?, alpha?, alternative?}
-17) ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?}
+17) ab_test: {group_col, control, treatment, metric, metric_type?, success_value?, alpha?, alternative?}
 18) ols_regression: {target, predictors, alpha?}
+19) gap_decomposition: {segment_by, metric, focus_segment?}
 
 HEURISTICS
 - Always include direct answer tasks first.
-- For "why/driver/difference": include contrast + volume + average + mix + driver checks.
+- For "why/driver/difference": always include gap_decomposition. Treat correlations and segment contrasts as associations, never as causal proof.
+- Prefer the smallest set of non-duplicate tasks that closes the question's required capabilities.
 - For SQL multi-table schemas: include schema-aware sql_query and join-profile tasks when relevant columns are in different tables.
 - For business context: include kpi_template_apply for best-fit domain and add segment/cohort tasks if question implies segmentation or retention.
 
@@ -133,10 +142,119 @@ ALLOWED_TASK_TYPES = {
     "kpi_template_apply",
     "metric_definition",
     "segment_analysis",
+    "gap_decomposition",
     "cohort_analysis",
     "statistical_test",
     "ab_test",
     "ols_regression",
+}
+
+SUPPORTED_ANALYSIS_TYPES = {
+    "descriptive",
+    "trend",
+    "segment_comparison",
+    "diagnostic",
+    "experiment_ab",
+    "forecasting_unsupported",
+    "impossible",
+}
+
+ALLOWED_TASKS_BY_ANALYSIS_TYPE: Dict[str, set[str]] = {
+    "descriptive": {
+        "groupby_agg",
+        "groupby2_agg",
+        "distribution",
+        "topk",
+        "kpi_template_apply",
+        "segment_analysis",
+        "metric_definition",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "trend": {
+        "timeseries_agg",
+        "groupby_agg",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "cohort_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "segment_comparison": {
+        "groupby_agg",
+        "groupby2_agg",
+        "filter_agg",
+        "group_distribution",
+        "topk",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "diagnostic": {
+        "groupby_agg",
+        "groupby2_agg",
+        "filter_agg",
+        "correlation",
+        "distribution",
+        "group_distribution",
+        "timeseries_agg",
+        "kpi_template_apply",
+        "segment_analysis",
+        "gap_decomposition",
+        "metric_definition",
+        "statistical_test",
+        "ols_regression",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "experiment_ab": {
+        "ab_test",
+        "statistical_test",
+        "groupby_agg",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "forecasting_unsupported": {
+        "timeseries_agg",
+        "groupby_agg",
+        "distribution",
+        "kpi_template_apply",
+        "segment_analysis",
+        "cohort_analysis",
+        "sql_query",
+        "sql_join_profile",
+    },
+    "impossible": {
+        "kpi_template_apply",
+        "distribution",
+        "groupby_agg",
+    },
+}
+
+MANDATORY_TASK_TYPES_BY_ANALYSIS_TYPE: Dict[str, set[str]] = {
+    "descriptive": {"kpi_template_apply", "distribution"},
+    "trend": {"kpi_template_apply", "timeseries_agg"},
+    "segment_comparison": {"kpi_template_apply", "groupby_agg", "segment_analysis"},
+    "diagnostic": {"kpi_template_apply", "groupby_agg", "segment_analysis", "gap_decomposition"},
+    "experiment_ab": {"kpi_template_apply", "ab_test"},
+    "forecasting_unsupported": {"kpi_template_apply", "timeseries_agg"},
+    "impossible": {"kpi_template_apply"},
+}
+
+TASK_BUDGET_BY_ANALYSIS_TYPE: Dict[str, int] = {
+    "descriptive": 12,
+    "trend": 14,
+    "segment_comparison": 16,
+    "diagnostic": 18,
+    "experiment_ab": 14,
+    "forecasting_unsupported": 10,
+    "impossible": 6,
 }
 
 
@@ -334,12 +452,276 @@ def _choose_regression_predictors(numeric_cols: List[str], target: str | None) -
     return out[:4]
 
 
+def _classify_analysis_type(
+    question: str,
+    *,
+    metric: str | None,
+    time_col: str | None,
+    segment_cols: List[str],
+    experiment_group_col: str | None,
+) -> tuple[str, List[str], str]:
+    q = (question or "").lower()
+    blocked: List[str] = []
+
+    if _contains_any(q, {"forecast", "predict", "projection", "next month", "next quarter", "next year"}):
+        if not time_col:
+            blocked.append("missing_time_column")
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "forecasting_unsupported", blocked, "Forecast-like request; pipeline is limited to historical analysis."
+
+    if _contains_any(q, AB_KEYWORDS):
+        if not experiment_group_col:
+            blocked.append("missing_experiment_group_column")
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        if blocked:
+            return "impossible", blocked, "Experiment intent detected but required columns are unavailable."
+        return "experiment_ab", blocked, "Experiment intent detected."
+
+    if _contains_any(q, REGRESSION_KEYWORDS):
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "diagnostic", blocked, "Regression/association intent detected."
+
+    if _contains_any(q, WHY_KEYWORDS):
+        if not segment_cols:
+            blocked.append("missing_segment_column")
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "diagnostic", blocked, "Diagnostic/driver intent detected."
+
+    if _contains_any(q, TIME_KEYWORDS):
+        if not time_col:
+            blocked.append("missing_time_column")
+            return "impossible", blocked, "Trend intent detected but no time column is available."
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "trend", blocked, "Trend/time intent detected."
+
+    if _contains_any(q, COMPARE_KEYWORDS):
+        if not segment_cols:
+            blocked.append("missing_segment_column")
+            return "impossible", blocked, "Comparison intent detected but no segment column is available."
+        if not metric:
+            blocked.append("missing_numeric_metric")
+        return "segment_comparison", blocked, "Segment comparison intent detected."
+
+    if not metric:
+        blocked.append("missing_numeric_metric")
+    return "descriptive", blocked, "Default descriptive route."
+
+
+def _route_comparison_logic(
+    analysis_type: str,
+    *,
+    metric: str | None,
+    time_col: str | None,
+    segment_cols: List[str],
+    experiment_group_col: str | None,
+) -> str:
+    if analysis_type == "experiment_ab":
+        return (
+            f"Compare treatment vs control on {metric} using {experiment_group_col}; "
+            "estimate lift and significance."
+        )
+    if analysis_type == "trend":
+        return f"Evaluate period-over-period movement of {metric} on {time_col}."
+    if analysis_type == "segment_comparison":
+        seg = segment_cols[0] if segment_cols else "segments"
+        return f"Compare {metric} across {seg} with absolute and relative deltas."
+    if analysis_type == "diagnostic":
+        seg = segment_cols[0] if segment_cols else "major dimensions"
+        return f"Decompose {metric} by {seg}, volume, and mix to identify drivers."
+    if analysis_type == "forecasting_unsupported":
+        return f"Provide historical baseline for {metric}; do not forecast future values."
+    if analysis_type == "impossible":
+        return "Return infeasibility summary with missing requirements."
+    return f"Summarize overall {metric} and key segment breakdowns."
+
+
+def _route_success_criterion(analysis_type: str) -> str:
+    if analysis_type == "experiment_ab":
+        return "Report lift and p-value at alpha=0.05 with valid control/treatment groups."
+    if analysis_type == "trend":
+        return "Report trend direction and magnitude with sufficient time periods."
+    if analysis_type == "segment_comparison":
+        return "Report ranked segment deltas with absolute and percentage difference."
+    if analysis_type == "diagnostic":
+        return "Report top contributors with artifact-backed evidence."
+    if analysis_type == "forecasting_unsupported":
+        return "Report historical trend only and explicitly flag forecasting as unsupported."
+    if analysis_type == "impossible":
+        return "Return a precise infeasibility explanation with missing requirements."
+    return "Return descriptive KPIs grounded in computed artifacts."
+
+
+def _build_planning_contract(
+    *,
+    question: str,
+    schema_cols: List[str],
+    date_cols: List[str],
+    metric_hint: str | None,
+    primary_dim_hint: str | None,
+    secondary_dim_hint: str | None,
+    analysis_type: str,
+    blocked_requirements: List[str],
+    intake_plan: Dict[str, Any] | None,
+    experiment_group_col: str | None,
+    control_label: str | None,
+    treatment_label: str | None,
+) -> Dict[str, Any]:
+    intake = dict((intake_plan or {}).get("framing", {}) or {})
+
+    target_metric = intake.get("target_metric")
+    if target_metric not in schema_cols:
+        target_metric = metric_hint if metric_hint in schema_cols else None
+
+    time_col = intake.get("time_column")
+    if time_col not in schema_cols:
+        time_col = date_cols[0] if date_cols else None
+
+    segment_columns = intake.get("segment_columns")
+    if not isinstance(segment_columns, list):
+        segment_columns = []
+    segment_columns = [str(c) for c in segment_columns if str(c) in schema_cols]
+    if not segment_columns:
+        for c in [primary_dim_hint, secondary_dim_hint]:
+            if c and c in schema_cols and c not in segment_columns:
+                segment_columns.append(c)
+
+    aggregation_level = str(intake.get("aggregation_level", "")).strip()
+    if not aggregation_level:
+        if analysis_type == "trend" and time_col:
+            aggregation_level = f"time:{time_col}"
+        elif analysis_type == "experiment_ab" and experiment_group_col:
+            aggregation_level = f"group:{experiment_group_col}"
+        elif segment_columns:
+            aggregation_level = f"segment:{segment_columns[0]}"
+        else:
+            aggregation_level = "overall"
+
+    metric_aggregation = default_agg_for_metric(str(target_metric or "metric"), preferred=intake.get("metric_aggregation"))
+    comparison_logic = str(intake.get("comparison_logic", "")).strip() or _route_comparison_logic(
+        analysis_type,
+        metric=target_metric,
+        time_col=time_col,
+        segment_cols=segment_columns,
+        experiment_group_col=experiment_group_col,
+    )
+    success_criterion = str(intake.get("success_criterion", "")).strip() or _route_success_criterion(analysis_type)
+
+    limitations = intake.get("analysis_limitations")
+    if not isinstance(limitations, list):
+        limitations = []
+    for req in blocked_requirements:
+        if req == "missing_time_column":
+            limitations.append("No usable time column is available for time-based analysis.")
+        elif req == "missing_segment_column":
+            limitations.append("No suitable segment column is available for segment comparison.")
+        elif req == "missing_numeric_metric":
+            limitations.append("No numeric metric candidate is available for quantitative analysis.")
+        elif req == "missing_experiment_group_column":
+            limitations.append("No experiment group column (control/treatment) is available.")
+    if analysis_type == "forecasting_unsupported":
+        limitations.append("Forecasting is unsupported; only historical analysis is provided.")
+    if analysis_type == "impossible":
+        limitations.append("Question cannot be fully answered with available data constraints.")
+    if not limitations:
+        limitations.append("All conclusions are limited to provided columns and computed artifacts.")
+    limitations = list(dict.fromkeys(str(x) for x in limitations))
+
+    feasibility_status = str(intake.get("feasibility_status", "")).strip()
+    if not feasibility_status:
+        feasibility_status = "infeasible" if analysis_type == "impossible" else ("partially_feasible" if blocked_requirements else "feasible")
+
+    contract = {
+        "analysis_type": analysis_type,
+        "target_metric": target_metric,
+        "aggregation_level": aggregation_level,
+        "metric_aggregation": metric_aggregation,
+        "time_column": time_col,
+        "segment_columns": segment_columns,
+        "comparison_logic": comparison_logic,
+        "success_criterion": success_criterion,
+        "analysis_limitations": limitations,
+        "feasibility_status": feasibility_status,
+        "experiment_group_column": experiment_group_col,
+        "experiment_control_label": control_label,
+        "experiment_treatment_label": treatment_label,
+    }
+    return contract
+
+
+def _route_seed_tasks(planning_contract: Dict[str, Any], business_domain: str) -> List[Dict[str, Any]]:
+    analysis_type = str(planning_contract.get("analysis_type", "descriptive"))
+    metric = planning_contract.get("target_metric")
+    agg = str(planning_contract.get("metric_aggregation", "sum"))
+    time_col = planning_contract.get("time_column")
+    segments = planning_contract.get("segment_columns") or []
+    group_col = planning_contract.get("experiment_group_column")
+    control = planning_contract.get("experiment_control_label") or "control"
+    treatment = planning_contract.get("experiment_treatment_label") or "treatment"
+
+    seeded: List[Dict[str, Any]] = [{"type": "kpi_template_apply", "params": {"domain": business_domain}}]
+    if metric:
+        seeded.append({"type": "distribution", "params": {"column": metric, "quantiles": [0.05, 0.25, 0.5, 0.75, 0.95]}})
+    if segments and metric:
+        seeded.append(
+            {
+                "type": "segment_analysis",
+                "params": {"segment_by": segments[0], "metric": metric, "agg": agg, "limit": 100},
+            }
+        )
+    if analysis_type in {"trend", "forecasting_unsupported"} and time_col and metric:
+        seeded.append({"type": "timeseries_agg", "params": {"date_col": time_col, "metric": metric, "freq": "M", "agg": agg}})
+    if analysis_type == "segment_comparison" and segments and metric:
+        seeded.append({"type": "groupby_agg", "params": {"group_by": segments[0], "metric": metric, "agg": agg, "limit": 1000}})
+    if analysis_type == "diagnostic" and segments and metric:
+        seeded.append(
+            {
+                "type": "gap_decomposition",
+                "params": {"segment_by": segments[0], "metric": metric},
+            }
+        )
+    if analysis_type == "experiment_ab" and group_col and metric:
+        seeded.append(
+            {
+                "type": "ab_test",
+                "params": {
+                    "group_col": group_col,
+                    "control": control,
+                    "treatment": treatment,
+                    "metric": metric,
+                    "metric_type": "auto",
+                    "alpha": 0.05,
+                },
+            }
+        )
+    return seeded
+
+
+def _filter_tasks_by_analysis_type(tasks: List[Dict[str, Any]], analysis_type: str) -> List[Dict[str, Any]]:
+    allowed = ALLOWED_TASKS_BY_ANALYSIS_TYPE.get(analysis_type, ALLOWED_TASK_TYPES)
+    return [t for t in tasks if str(t.get("type", "")).strip() in allowed]
+
+
+def _resolve_metric_agg(metric: str, agg: str | None, *, fallback: str | None = None) -> str:
+    candidate = str(agg or "").strip().lower() if agg is not None else ""
+    if candidate and is_agg_allowed_for_metric(metric, candidate):
+        return candidate
+    return default_agg_for_metric(metric, preferred=fallback or candidate or None)
+
+
 def _sanitize_and_number_tasks(
     tasks: List[Dict[str, Any]],
     schema_cols: List[str],
     numeric_cols: List[str],
+    planning_contract: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     clean: List[Dict[str, Any]] = []
+    contract_metric = str((planning_contract or {}).get("target_metric") or "")
+    contract_agg = str((planning_contract or {}).get("metric_aggregation") or "").strip().lower()
 
     for task in tasks:
         ttype = str(task.get("type", "")).strip()
@@ -351,7 +733,8 @@ def _sanitize_and_number_tasks(
         if ttype == "groupby_agg":
             if p.get("group_by") not in schema_cols or p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("limit", 50)
 
         elif ttype == "groupby2_agg":
@@ -359,7 +742,8 @@ def _sanitize_and_number_tasks(
                 continue
             if p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("limit", 100)
 
         elif ttype == "filter_agg":
@@ -367,7 +751,8 @@ def _sanitize_and_number_tasks(
                 continue
             if "filter_val" not in p:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
 
         elif ttype == "correlation":
             if p.get("x") not in numeric_cols or p.get("y") not in numeric_cols:
@@ -385,7 +770,8 @@ def _sanitize_and_number_tasks(
                 continue
             if p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("quantiles", [0.5, 0.75, 0.9, 0.95, 0.99])
 
         elif ttype == "recency_by_group":
@@ -397,14 +783,16 @@ def _sanitize_and_number_tasks(
         elif ttype == "topk":
             if p.get("by") not in schema_cols or p.get("metric") not in numeric_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("k", 10)
 
         elif ttype == "timeseries_agg":
             if p.get("date_col") not in schema_cols or p.get("metric") not in schema_cols:
                 continue
             p.setdefault("freq", "M")
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
 
         elif ttype == "sql_query":
             query = str(p.get("query", "")).strip()
@@ -442,7 +830,10 @@ def _sanitize_and_number_tasks(
                 continue
             if not metric_col and not expression:
                 continue
-            p.setdefault("agg", "sum")
+            if metric_col:
+                p["agg"] = _resolve_metric_agg(metric_col, p.get("agg"), fallback=contract_agg or "sum")
+            else:
+                p.setdefault("agg", contract_agg or "sum")
             if metric_col and metric_col not in schema_cols:
                 continue
             if p.get("group_by") and p.get("group_by") not in schema_cols:
@@ -453,8 +844,15 @@ def _sanitize_and_number_tasks(
                 continue
             if p.get("metric") not in schema_cols:
                 continue
-            p.setdefault("agg", "sum")
+            metric = str(p.get("metric") or contract_metric)
+            p["agg"] = _resolve_metric_agg(metric, p.get("agg"), fallback=contract_agg or "sum")
             p.setdefault("limit", 100)
+
+        elif ttype == "gap_decomposition":
+            if p.get("segment_by") not in schema_cols or p.get("metric") not in numeric_cols:
+                continue
+            if p.get("focus_segment") is not None:
+                p["focus_segment"] = str(p["focus_segment"])
 
         elif ttype == "cohort_analysis":
             if p.get("entity_col") not in schema_cols:
@@ -484,6 +882,7 @@ def _sanitize_and_number_tasks(
                 continue
             p.setdefault("metric_type", "auto")
             p.setdefault("alpha", 0.05)
+            p.setdefault("alternative", "two-sided")
 
         elif ttype == "ols_regression":
             if p.get("target") not in numeric_cols:
@@ -498,6 +897,8 @@ def _sanitize_and_number_tasks(
             p.setdefault("alpha", 0.05)
 
         clean.append({"type": ttype, "params": p})
+
+    clean = _dedupe_tasks_by_semantic_key(clean)
 
     out: List[Dict[str, Any]] = []
     for i, task in enumerate(clean, start=1):
@@ -891,6 +1292,105 @@ def _merge_task_lists(first: List[Dict[str, Any]], second: List[Dict[str, Any]])
     return merged
 
 
+def _task_semantic_key(task: Dict[str, Any]) -> str:
+    ttype = str(task.get("type", "")).strip()
+    params = dict(task.get("params", {}) or {})
+    # Row/display limits do not change the analytical question. Ignoring them here
+    # prevents the seed, heuristic, and LLM planners from scheduling duplicates.
+    semantic_params = {k: v for k, v in params.items() if k not in {"limit", "k"}}
+    core = {"type": ttype, "params": dict(sorted(semantic_params.items(), key=lambda kv: kv[0]))}
+    return json.dumps(core, sort_keys=True, ensure_ascii=False)
+
+
+def _dedupe_tasks_by_semantic_key(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for task in tasks:
+        sk = _task_semantic_key(task)
+        if sk in seen:
+            continue
+        seen.add(sk)
+        out.append(task)
+    return out
+
+
+def _enforce_mandatory_task_types(
+    tasks: List[Dict[str, Any]],
+    *,
+    analysis_type: str,
+    seeded_tasks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    mandatory = MANDATORY_TASK_TYPES_BY_ANALYSIS_TYPE.get(analysis_type, set())
+    if not mandatory:
+        return tasks
+    have = {str(t.get("type", "")).strip() for t in tasks}
+    if mandatory.issubset(have):
+        return tasks
+    out = list(tasks)
+    for seeded in seeded_tasks:
+        ttype = str(seeded.get("type", "")).strip()
+        if ttype in mandatory and ttype not in have:
+            out.append(seeded)
+            have.add(ttype)
+    return _dedupe_tasks_by_semantic_key(out)
+
+
+def _apply_task_budget(tasks: List[Dict[str, Any]], *, analysis_type: str, seed_keys: set[str], max_tasks: int) -> List[Dict[str, Any]]:
+    if max_tasks <= 0:
+        return _dedupe_tasks_by_semantic_key(tasks)
+
+    deduped = _dedupe_tasks_by_semantic_key(tasks)
+    if len(deduped) <= max_tasks:
+        return deduped
+
+    prioritized: List[Dict[str, Any]] = []
+    overflow: List[Dict[str, Any]] = []
+    for task in deduped:
+        if _task_semantic_key(task) in seed_keys:
+            prioritized.append(task)
+        else:
+            overflow.append(task)
+
+    out = list(prioritized[:max_tasks])
+    if len(out) < max_tasks:
+        out.extend(overflow[: max_tasks - len(out)])
+    return out
+
+
+def _annotate_task_provenance(
+    tasks: List[Dict[str, Any]],
+    *,
+    analysis_type: str,
+    seeded_tasks: List[Dict[str, Any]],
+    heuristic_tasks: List[Dict[str, Any]],
+    sql_heuristic_tasks: List[Dict[str, Any]],
+    llm_tasks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    stage_keys = {
+        "seed": {_task_semantic_key(t) for t in seeded_tasks},
+        "heuristic": {_task_semantic_key(t) for t in heuristic_tasks},
+        "sql_heuristic": {_task_semantic_key(t) for t in sql_heuristic_tasks},
+        "llm": {_task_semantic_key(t) for t in llm_tasks},
+    }
+    out: List[Dict[str, Any]] = []
+    for task in tasks:
+        sk = _task_semantic_key(task)
+        stages: List[str] = []
+        for stage, keys in stage_keys.items():
+            if sk in keys:
+                stages.append(stage)
+        if not stages:
+            stages = ["heuristic"]
+        obj = dict(task)
+        obj["provenance"] = {
+            "stages": stages,
+            "route": analysis_type,
+            "semantic_key": sk,
+        }
+        out.append(obj)
+    return out
+
+
 class PlannerAgent(Agent):
     name = "planner"
 
@@ -907,18 +1407,56 @@ class PlannerAgent(Agent):
         column_profiles = profile.get("column_profiles", []) or []
         sql_schema = ctx.get("sql_schema") or profile.get("sql_schema")
         sql_source = ctx.get("sql_source")
+        intake_plan = ctx["memory"].get("result.intake", {}) or {}
 
         numeric_cols = [c for c in schema_cols if _is_numeric_dtype(str(schema_dtypes.get(c, "")))]
+        date_cols = [c for c in schema_cols if _is_datetime_dtype(str(schema_dtypes.get(c, "")))]
+        for c in datetime_candidates:
+            if c in schema_cols and c not in date_cols:
+                date_cols.append(c)
         categorical_cols = [c for c in schema_cols if c not in numeric_cols]
         metric_hint = _choose_metric(question, schema_cols, numeric_cols)
         primary_dim_hint = _choose_primary_dim(question, schema_cols, categorical_cols)
         secondary_dim_hint = _choose_secondary_dim(question, schema_cols, primary_dim_hint)
+        experiment_group_col = _choose_experiment_group_col(schema_cols, column_profiles)
+        control_label, treatment_label = _extract_experiment_labels(column_profiles, experiment_group_col)
         q_lc = question.lower()
         count_intent = _contains_any(q_lc, COUNT_KEYWORDS)
         count_metric = "order_id" if "order_id" in schema_cols else ("transaction_id" if "transaction_id" in schema_cols else None)
         main_metric = count_metric if count_intent and count_metric else metric_hint
-        main_agg = "count" if count_intent and count_metric else "sum"
+        main_agg = "count" if count_intent and count_metric else default_agg_for_metric(str(main_metric or "metric"))
         business_domain = detect_business_domain(question, schema_cols)
+        domain_candidates = score_business_domains(question, schema_cols)[:3]
+
+        intake_analysis_type = str(intake_plan.get("analysis_type", "")).strip()
+        intake_blocked = intake_plan.get("blocked_requirements")
+        blocked_requirements = [str(x) for x in intake_blocked] if isinstance(intake_blocked, list) else []
+        if intake_analysis_type not in SUPPORTED_ANALYSIS_TYPES:
+            analysis_type, blocked_requirements, routing_reason = _classify_analysis_type(
+                question,
+                metric=main_metric,
+                time_col=date_cols[0] if date_cols else None,
+                segment_cols=[x for x in [primary_dim_hint, secondary_dim_hint] if x],
+                experiment_group_col=experiment_group_col,
+            )
+        else:
+            analysis_type = intake_analysis_type
+            routing_reason = str(intake_plan.get("routing_reason", "")).strip() or "Using intake route."
+
+        planning_contract = _build_planning_contract(
+            question=question,
+            schema_cols=schema_cols,
+            date_cols=date_cols,
+            metric_hint=main_metric,
+            primary_dim_hint=primary_dim_hint,
+            secondary_dim_hint=secondary_dim_hint,
+            analysis_type=analysis_type,
+            blocked_requirements=blocked_requirements,
+            intake_plan=intake_plan,
+            experiment_group_col=experiment_group_col,
+            control_label=control_label,
+            treatment_label=treatment_label,
+        )
 
         heuristic_tasks = _build_heuristic_tasks(
             question=question,
@@ -951,11 +1489,17 @@ class PlannerAgent(Agent):
             "schema": {"columns": schema_cols, "dtypes": schema_dtypes},
             "source": ctx.get("source", {"type": "csv"}),
             "suggested_domain": business_domain,
+            "domain_candidates": domain_candidates,
+            "analysis_type": analysis_type,
+            "planning_contract": planning_contract,
             "sql_schema": sql_schema if isinstance(sql_schema, dict) else None,
         }
 
+        planner_token_budget = int(getattr(cfg.llm, "planner_max_tokens", cfg.llm.max_tokens))
+        client = None
         try:
             client = OpenRouterClient(timeout_s=cfg.llm.timeout_s)
+            client.max_attempts = int(getattr(cfg.llm, "max_attempts", getattr(client, "max_attempts", 4)))
             logger.info("[Planner] Calling OpenRouter for task plan...")
             raw = client.chat(
                 model=cfg.llm.model,
@@ -964,10 +1508,21 @@ class PlannerAgent(Agent):
                     {"role": "user", "content": json.dumps(payload, indent=2)},
                 ],
                 temperature=0.0,
-                max_tokens=max(1200, min(cfg.llm.max_tokens, 4096)),
+                max_tokens=planner_token_budget,
             )
         except Exception as e:
             logger.warning(f"[Planner] OpenRouter call failed: {e}. Continuing with deterministic plan.")
+
+        store.write_json(
+            "planner_llm_metadata.json",
+            {
+                "model": cfg.llm.model,
+                "max_output_tokens": planner_token_budget,
+                "finish_reason": getattr(client, "last_finish_reason", None),
+                "usage": getattr(client, "last_usage", {}),
+                "response_received": bool(raw and raw.strip()),
+            },
+        )
 
         store.write_text("planner_raw.txt", raw or "")
 
@@ -980,8 +1535,36 @@ class PlannerAgent(Agent):
         else:
             logger.warning("[Planner] Empty LLM response. Using deterministic plan.")
 
+        seeded_tasks = _route_seed_tasks(planning_contract, business_domain)
         merged_tasks = _merge_task_lists(_merge_task_lists(heuristic_tasks, sql_heuristic_tasks), llm_tasks)
-        final_tasks = _sanitize_and_number_tasks(merged_tasks, schema_cols, numeric_cols)
+        route_filtered = _filter_tasks_by_analysis_type(merged_tasks, analysis_type)
+        routed_tasks = _merge_task_lists(seeded_tasks, route_filtered)
+        routed_tasks = _enforce_mandatory_task_types(
+            routed_tasks,
+            analysis_type=analysis_type,
+            seeded_tasks=seeded_tasks,
+        )
+        budget_limit = TASK_BUDGET_BY_ANALYSIS_TYPE.get(analysis_type, 12)
+        routed_tasks = _apply_task_budget(
+            routed_tasks,
+            analysis_type=analysis_type,
+            seed_keys={_task_semantic_key(t) for t in seeded_tasks},
+            max_tasks=budget_limit,
+        )
+        final_tasks = _sanitize_and_number_tasks(
+            routed_tasks,
+            schema_cols,
+            numeric_cols,
+            planning_contract=planning_contract,
+        )
+        final_tasks = _annotate_task_provenance(
+            final_tasks,
+            analysis_type=analysis_type,
+            seeded_tasks=seeded_tasks,
+            heuristic_tasks=heuristic_tasks,
+            sql_heuristic_tasks=sql_heuristic_tasks,
+            llm_tasks=llm_tasks,
+        )
 
         if not final_tasks:
             fallback_col = "revenue" if "revenue" in numeric_cols else (numeric_cols[0] if numeric_cols else None)
@@ -991,6 +1574,13 @@ class PlannerAgent(Agent):
                         "id": "T1",
                         "type": "distribution",
                         "params": {"column": fallback_col, "quantiles": [0.05, 0.25, 0.5, 0.75, 0.95]},
+                        "provenance": {
+                            "stages": ["seed"],
+                            "route": analysis_type,
+                            "semantic_key": _task_semantic_key(
+                                {"type": "distribution", "params": {"column": fallback_col, "quantiles": [0.05, 0.25, 0.5, 0.75, 0.95]}}
+                            ),
+                        },
                     }
                 ]
             else:
@@ -1000,13 +1590,34 @@ class PlannerAgent(Agent):
                         "id": "T1",
                         "type": "groupby_agg",
                         "params": {"group_by": fallback_group, "metric": fallback_group, "agg": "count", "limit": 50},
+                        "provenance": {
+                            "stages": ["seed"],
+                            "route": analysis_type,
+                            "semantic_key": _task_semantic_key(
+                                {
+                                    "type": "groupby_agg",
+                                    "params": {"group_by": fallback_group, "metric": fallback_group, "agg": "count", "limit": 50},
+                                }
+                            ),
+                        },
                     }
                 ]
 
         plan = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "analysis_type": analysis_type,
+            "routing_reason": routing_reason,
+            "blocked_requirements": blocked_requirements,
+            "feasibility_status": planning_contract.get("feasibility_status"),
+            "planning_contract": planning_contract,
+            "task_budget": {"max_tasks": int(budget_limit), "planned_tasks": int(len(final_tasks))},
             "tasks": final_tasks,
-            "notes": f"Deterministic-first plan with optional LLM enrichment. Domain={business_domain}.",
+            "notes": (
+                f"Deterministic-first plan with optional LLM enrichment. "
+                f"Domain={business_domain}, route={analysis_type}."
+            ),
         }
+        plan = validate_analysis_tasks_contract(plan).model_dump()
         store.write_json("analysis_tasks.json", plan)
         logger.info("[Planner] Wrote analysis_tasks.json")
         return plan

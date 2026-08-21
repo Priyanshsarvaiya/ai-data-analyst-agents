@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 
@@ -21,7 +22,10 @@ def _result_markdown(result: StatisticalResult) -> str:
         f"- Analysis type: {result.analysis_type}",
         f"- Method: {result.method}",
         f"- Method rationale: {result.method_reason}",
+        f"- Status: {result.status}",
         f"- Decision: {result.decision}",
+        f"- Alpha: {result.alpha}",
+        f"- Test statistic: {result.test_statistic if result.test_statistic is not None else 'n/a'}",
         f"- P-value: {result.p_value if result.p_value is not None else 'n/a'}",
         f"- Plain-language summary: {result.plain_language}",
         "",
@@ -30,6 +34,9 @@ def _result_markdown(result: StatisticalResult) -> str:
     for check in result.assumptions:
         status = "pass" if check.passed else ("warn" if check.passed is None else "fail")
         lines.append(f"- {check.name} ({status}): {check.detail}")
+    lines.extend(["", "## Warnings"])
+    for warning in result.warnings or ["None"]:
+        lines.append(f"- {warning}")
     lines.extend(["", "## Confidence Intervals"])
     if result.confidence_intervals:
         for ci in result.confidence_intervals:
@@ -41,9 +48,14 @@ def _result_markdown(result: StatisticalResult) -> str:
     lines.extend(["", "## Effect Sizes"])
     if result.effect_sizes:
         for eff in result.effect_sizes:
-            lines.append(f"- {eff.name}: {eff.value:.4f} ({eff.interpretation})")
+            line = f"- {eff.name}: {eff.value:.4f} ({eff.interpretation})"
+            if eff.caveat:
+                line += f" — {eff.caveat}"
+            lines.append(line)
     else:
         lines.append("- None")
+    lines.extend(["", "## Computed Metrics"])
+    lines.append(f"```json\n{json.dumps(result.metrics, indent=2, default=str)}\n```")
     lines.extend(["", "## Limitations"])
     for line in result.limitations or ["- None recorded."]:
         if line.startswith("-"):

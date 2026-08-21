@@ -29,8 +29,11 @@ def test_csv_pipeline_end_to_end_outputs(
         "next_steps_metrics_outputs.json",
         "eda_summary.json",
         "final_report.md",
+        "report_metadata.json",
         "review_log.json",
+        "run_scorecard.json",
         "agent_messages.json",
+        "shared_memory_audit.json",
         "run_manifest.json",
     ]
     assert_artifacts_exist(run_dir, expected_files)
@@ -46,11 +49,25 @@ def test_csv_pipeline_end_to_end_outputs(
     assert re.search(r"\[\d+\]", report)
 
     review = read_json(run_dir / "review_log.json")
-    assert review["status"] in {"pass", "warn"}
+    assert review["status"] in {"pass", "fail"}
 
     metrics = read_json(run_dir / "metrics_outputs.json")
+    assert metrics.get("schema_version")
     for item in metrics.get("computed", []):
         assert (run_dir / item["artifact"]).exists()
+
+    scorecard = read_json(run_dir / "run_scorecard.json")
+    assert scorecard["final_quality_status"] in {"pass", "fail"}
+    manifest = read_json(run_dir / "run_manifest.json")
+    assert manifest.get("quality_status") in {"pass", "fail"}
+    memory_audit = read_json(run_dir / "shared_memory_audit.json")
+    expected_agents = {
+        "intake", "profiling", "quality", "wrangling", "planner", "metrics",
+        "next_steps", "eda", "insights", "reporting", "reviewer", "scorecard",
+    }
+    assert expected_agents.issubset(memory_audit["actors"])
+    for agent_name in expected_agents:
+        assert f"result.{agent_name}" in memory_audit["actors"][agent_name]["write"]
 
 
 def test_csv_pipeline_handles_missing_expected_columns(

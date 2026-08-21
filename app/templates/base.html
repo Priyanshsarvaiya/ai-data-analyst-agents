@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}Analyst OS{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  {% if current_user %}
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('dashboard') }}" aria-label="Analyst OS home">
+      <span class="brand-mark">A</span>
+      <span>Analyst<span class="brand-dot">.</span></span>
+    </a>
+    <div class="topbar-actions">
+      <span class="user-chip"><span>{{ current_user.full_name[:1]|upper }}</span>{{ current_user.full_name }}</span>
+      <form action="{{ url_for('logout') }}" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="button button-quiet" type="submit">Sign out</button>
+      </form>
+    </div>
+  </header>
+  {% endif %}
+
+  <div class="flash-stack" aria-live="polite">
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <div class="flash flash-{{ category }}">
+        <span class="flash-dot"></span><span>{{ message }}</span>
+        <button type="button" aria-label="Dismiss" onclick="this.parentElement.remove()">×</button>
+      </div>
+    {% endfor %}
+  </div>
+
+  {% block content %}{% endblock %}
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

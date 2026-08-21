@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Literal, Optional
+import math
 
 
 AssumptionSeverity = Literal["info", "warn", "fail"]
@@ -56,6 +57,14 @@ class HypothesisTestRequest:
     success_value: Any = 1
     alpha: float = 0.05
     alternative: Literal["two-sided", "less", "greater"] = "two-sided"
+    metric_type: Literal["auto", "binary", "continuous", "categorical"] = "auto"
+
+    def __post_init__(self) -> None:
+        _validate_alpha(self.alpha)
+        if self.group_a is not None and self.group_b is not None and str(self.group_a) == str(self.group_b):
+            raise ValueError("group_a and group_b must identify different groups")
+        if self.paired and not self.pair_id_col:
+            raise ValueError("paired tests require pair_id_col")
 
 
 @dataclass(slots=True)
@@ -67,6 +76,12 @@ class ABTestRequest:
     metric_type: Literal["auto", "binary", "continuous"] = "auto"
     success_value: Any = 1
     alpha: float = 0.05
+    alternative: Literal["two-sided", "less", "greater"] = "two-sided"
+
+    def __post_init__(self) -> None:
+        _validate_alpha(self.alpha)
+        if str(self.control) == str(self.treatment):
+            raise ValueError("control and treatment must identify different groups")
 
 
 @dataclass(slots=True)
@@ -75,6 +90,14 @@ class RegressionRequest:
     predictors: List[str]
     alpha: float = 0.05
     include_standardized: bool = True
+
+    def __post_init__(self) -> None:
+        _validate_alpha(self.alpha)
+        self.predictors = list(dict.fromkeys(str(x) for x in self.predictors if str(x).strip()))
+        if not self.predictors:
+            raise ValueError("Regression requires at least one predictor")
+        if self.target in self.predictors:
+            raise ValueError("Regression target cannot also be a predictor")
 
 
 @dataclass(slots=True)
@@ -113,6 +136,20 @@ class StatisticalResult:
     extra_outputs: Dict[str, Any] = field(default_factory=dict)
     status: Literal["completed", "skipped", "not_reliable"] = "completed"
 
+    def __post_init__(self) -> None:
+        _validate_alpha(self.alpha)
+        if self.p_value is not None and not math.isfinite(float(self.p_value)):
+            self.p_value = None
+        if self.test_statistic is not None and not math.isfinite(float(self.test_statistic)):
+            self.test_statistic = None
+        if self.p_value is None and self.decision != "not_reliable":
+            self.decision = "not_reliable"
+            self.status = "not_reliable"
+        if self.decision == "not_reliable":
+            self.status = "not_reliable"
+        if any(int(n) < 0 for n in self.sample_sizes.values()):
+            raise ValueError("sample sizes must be non-negative")
+
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         data["assumptions"] = [x.to_dict() for x in self.assumptions]
@@ -131,3 +168,8 @@ class StatisticalArtifactBundle:
 
     def to_dict(self) -> Dict[str, Optional[str]]:
         return asdict(self)
+
+
+def _validate_alpha(alpha: float) -> None:
+    if not math.isfinite(float(alpha)) or not 0.0 < float(alpha) < 1.0:
+        raise ValueError("alpha must be a finite number strictly between 0 and 1")

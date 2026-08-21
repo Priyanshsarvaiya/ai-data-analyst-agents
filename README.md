@@ -1,645 +1,304 @@
-# AI Data Analyst Agents 🤖📊
+<p align="center">
+  <img src="docs/assets/ai-data-analyst-agents-hero.png" alt="AI Data Analyst Agents" width="900">
+</p>
 
-A production-oriented multi-agent system that simulates a real-world
-data analytics team.\
-This framework mirrors how professional data analysts work --- from
-problem scoping to data validation, analysis, and executive-ready
-reporting --- with strict artifact-based guardrails to prevent
-hallucinated insights.
+<p align="center">
+  <strong>From raw data to defensible decisions.</strong><br>
+  A multi-agent analytics system that profiles, validates, analyzes, reviews, and reports—with evidence attached.
+</p>
 
-------------------------------------------------------------------------
+<p align="center">
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <img alt="Flask" src="https://img.shields.io/badge/Web-Flask-111827?logo=flask&logoColor=white">
+  <img alt="Type checked with Pyright" src="https://img.shields.io/badge/types-Pyright-3178C6">
+</p>
 
-## 🌟 Overview
+---
 
-**AI Data Analyst Agents** is a modular multi-agent analytics system designed to:
+## What this project does
 
-- Turn raw datasets (CSV / SQL) into validated insights
-- Enforce reproducibility and analytical integrity
-- Generate executive-ready reports with traceable evidence
-- Simulate a real data analyst workflow
+AI Data Analyst Agents turns a business question and a CSV or read-only SQL source into a reproducible analysis workspace. Instead of asking one model to improvise an answer, specialized agents exchange structured artifacts through shared memory, compute results in Python, and require the final narrative to cite real evidence.
 
-Unlike simple “ask CSV questions” tools, this system follows a structured pipeline:
+It is built for questions such as:
 
-> Question → Profiling → Data Quality → Cleaning → EDA → Stats → Insights → Report → Review
+- Why did conversion decline, and which segments drove the change?
+- Did treatment improve conversion compared with control?
+- Which variables are associated with revenue?
+- What data-quality issues could invalidate this analysis?
 
-Every claim in the final report must reference a computed artifact (table, metric, chart, or query result).
+The result is not just a chat response. Every run produces its plan, cleaned data, metrics, statistical outputs, charts, report, review findings, message history, and audit trail.
 
-------------------------------------------------------------------------
+## Highlights
 
-# 🚀 Running AI Data Analyst Agents (Local Setup)
+| Capability | What it provides |
+|---|---|
+| Evidence-first reporting | Report claims resolve to computed metrics, tables, charts, or statistical artifacts. |
+| Coordinated specialist agents | Scoping, profiling, quality, wrangling, planning, metrics, EDA, insights, reporting, review, and scoring have separate responsibilities. |
+| CSV and SQL analysis | Analyze uploaded files or read-only SQLite/PostgreSQL sources. |
+| Statistical guardrails | Assumption checks, confidence intervals, effect sizes, hypothesis tests, A/B analysis, and robust OLS diagnostics. |
+| Business-aware KPIs | KPI templates cover general, ecommerce, SaaS, marketing, operations, finance, product, support, and people analytics. |
+| Shared-memory auditability | Agent reads, writes, messages, revisions, and final facts are recorded for inspection. |
+| Flask workspace | Sign in, upload and preview CSVs, add more data, launch analyses, and browse generated artifacts. |
+| Review and score gates | Unsupported language, missing computations, weak citations, and incomplete coverage remain visible instead of being rewritten away. |
 
-## 1️⃣ Clone the Repository
+## How it works
 
-``` bash
+```mermaid
+flowchart LR
+    A[Business question<br/>CSV or SQL] --> B[Intake]
+    B --> C[Profile & quality]
+    C --> D[Wrangle]
+    D --> E[Plan]
+    E --> F[Metrics & statistics]
+    F --> G[Gap-closing next steps]
+    G --> H[EDA & insights]
+    H --> I[Report]
+    I --> J{Reviewer}
+    J -->|Evidence-safe revision| I
+    J --> K[Scorecard & run artifacts]
+    M[(Shared memory<br/>& messages)] --- B
+    M --- E
+    M --- F
+    M --- H
+    M --- I
+    M --- J
+```
+
+> Intake → Profiling → Quality → Wrangling → Planner → Metrics → Next Steps → EDA → Insights → Reporting → Reviewer → Scorecard
+
+| Stage | Primary responsibility | Key output |
+|---|---|---|
+| Intake | Frame the question, grain, KPIs, segments, and time window | `analysis_plan.json` |
+| Profiling | Infer schema, candidate keys, distributions, and dataset shape | `data_profile.json` |
+| Quality | Find missingness, duplicates, invalid ranges, and outliers | `quality_report.json` |
+| Wrangling | Apply traceable cleaning and feature engineering | `cleaned.csv`, `feature_log.json` |
+| Planner | Convert the question into executable analytical tasks | `analysis_tasks.json` |
+| Metrics | Compute descriptive, diagnostic, and statistical results | `metrics_outputs.json`, `statistics/` |
+| Next Steps | Identify and execute bounded gap-closing work | `next_steps_plan.json`, `next_steps_metrics_outputs.json` |
+| EDA | Produce summaries and decision-relevant visualizations | `eda_summary.json`, `charts/` |
+| Insights | Gate question-level analytical coverage | `analysis_readiness.json` |
+| Reporting | Assemble an executive-ready, citation-bearing report | `final_report.md` |
+| Reviewer | Validate evidence, wording, coverage, and statistical claims | `review_log.json` |
+| Scorecard | Summarize run quality and remaining deficiencies | `run_scorecard.json` |
+
+## Quick start
+
+### 1. Install
+
+```bash
 git clone https://github.com/Priyanshsarvaiya/ai-data-analyst-agents.git
 cd ai-data-analyst-agents
-```
 
-------------------------------------------------------------------------
-
-## 2️⃣ Create a Virtual Environment
-
-### macOS / Linux
-
-``` bash
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate        # Windows: venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-### Windows
+### 2. Configure
 
-``` bash
-python -m venv venv
-venv\Scripts\activate
-```
-
-------------------------------------------------------------------------
-
-## 3️⃣ Install Dependencies
-
-``` bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-------------------------------------------------------------------------
-
-## 4️⃣ Configure Environment Variables
-
-Create a `.env` file in the project root:
-
-``` bash
+```bash
 cp .env.example .env
 ```
 
-Edit `.env` and add your OpenRouter API key and model:
+Add your OpenRouter key and select a compatible model:
 
-``` env
+```env
 OPENROUTER_API_KEY=your_key_here
-OPENROUTER_MODEL=z-ai/glm-5
-OPENROUTER_SITE_URL=http://localhost
-OPENROUTER_APP_NAME=ai-data-analyst-agents
-
-ENV=local
-ARTIFACTS_DIR=artifacts
-LOG_LEVEL=INFO
+OPENROUTER_MODEL=z-ai/glm-5.2
+LLM_PLANNER_MAX_TOKENS=8192
+LLM_REPORT_MAX_TOKENS=16384
+LLM_MAX_ATTEMPTS=4
 ```
 
-------------------------------------------------------------------------
+For the web app, also configure authentication storage and secrets:
 
-## 5️⃣ Add Your Dataset
-
-Place your CSV file inside the `data/` folder:
-
-    ai-data-analyst-agents/
-      data/
-        your_dataset.csv
-
-------------------------------------------------------------------------
-
-## 6️⃣ Run the Analysis Pipeline
-
-``` bash
-python -m ai_data_analyst_agents.pipelines.run_csv_pipeline   --file data/your_dataset.csv   --question "What insights can we derive from this dataset?"
+```env
+AUTH_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DB_NAME
+AUTH_PASSWORD_PEPPER=replace_with_a_long_random_secret
+FLASK_SECRET_KEY=replace_with_a_different_long_random_secret
 ```
 
-For SQL sources (SQLite/PostgreSQL):
+Environment variables override values in `configs/settings.yaml`. Keep secrets out of source control.
 
-``` bash
-python -m ai_data_analyst_agents.pipelines.run_sql_pipeline   --db-url "sqlite:///data/your.db"   --question "What insights can we derive from this database?"
+### 3. Launch the web workspace
+
+```bash
+python -m flask --app app.flask_app:create_app run --debug
 ```
 
-------------------------------------------------------------------------
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000), sign in, and start an analysis. The Flask interface supports CSV drag-and-drop, an in-browser data preview, additional CSV uploads, read-only SQL connections, run progress, and artifact browsing.
 
-## 7️⃣ View Results
+## Run from the CLI
 
-After execution, a new folder will be created inside:
+### CSV
 
-    artifacts/
-      run_YYYYMMDD_HHMMSS/
-
-Inside you will find:
-
--   analysis_plan.json
--   data_profile.json
--   quality_report.json
--   quality_warnings.md
--   cleaned.csv
--   feature_log.json
--   eda_summary.json
--   charts/
--   final_report.md
--   review_log.json
--   logs.txt
-
-Open `final_report.md` to see the generated analysis report.
-
-------------------------------------------------------------------------
-
-## 🎯 Design Philosophy
-
-This project is built around 5 principles:
-
-1. **Artifact-First Reporting** – No insight without evidence.
-2. **Multi-Agent Specialization** – Each agent has a clearly defined responsibility.
-3. **Reproducibility** – One command generates the full analysis folder.
-4. **Data Integrity First** – Data quality validation before analysis.
-5. **Business Framing** – Insights must answer a stakeholder question.
-
-------------------------------------------------------------------------
-
-# 🏗️ Architecture
-
-## Multi-Agent System
-
-The system consists of the following specialized agents:
-
----
-
-### 1️⃣ Intake Agent (Scoping Agent)
-
-**Purpose:** Clarifies the business question before analysis begins.
-
-**Responsibilities:**
-- Define KPI(s)
-- Define time window
-- Define segmentation
-- Identify dataset grain (1 row = ?)
-- Produce structured analysis plan
-
-**Output:**
-- `analysis_plan.json`
-
----
-
-### 2️⃣ Data Profiling Agent
-
-**Purpose:** Understand dataset structure and schema.
-
-**Responsibilities:**
-- Infer column types
-- Identify potential keys
-- Detect dataset grain
-- Generate summary statistics
-- Create data dictionary
-
-**Output:**
-- `data_profile.json`
-
----
-
-### 3️⃣ Data Quality Agent
-
-**Purpose:** Validate data reliability before analysis.
-
-**Checks Include:**
-- Missing values %
-- Duplicate rows
-- Impossible values (negative revenue, etc.)
-- Outliers (IQR / Z-score)
-- Schema drift detection
-- Range validation
-- Null-heavy columns
-
-**Output:**
-- `quality_report.json`
-- `quality_warnings.md`
-
----
-
-### 4️⃣ Data Wrangling Agent
-
-**Purpose:** Prepare analysis-ready dataset.
-
-**Responsibilities:**
-- Handle missing values
-- Remove duplicates
-- Standardize formats
-- Feature engineering
-- Cohort creation
-- Derived KPIs
-
-**Output:**
-- `cleaned.csv`
-- `feature_log.json`
-
----
-
-### 5️⃣ EDA Agent (Exploratory Data Analysis)
-
-**Purpose:** Discover patterns and trends.
-
-**Produces:**
-- Summary statistics
-- Distribution plots
-- Correlation matrix
-- Segment comparisons
-- Time series trends
-- Funnel or cohort analysis
-
-**Output:**
-- `/charts/`
-- `eda_summary.json`
-
----
-
-### 6️⃣ Statistics / Experiment Agent (Optional)
-
-**Purpose:** Perform statistical validation when required.
-
-**Includes:**
-- Hypothesis testing
-- Confidence intervals
-- Effect size
-- Basic regression (OLS)
-- A/B test evaluation
-
-**Output:**
-- `statistics/<task_id>_<method>/summary.json`
-- `statistics/<task_id>_<method>/assumptions.json`
-- `statistics/<task_id>_<method>/results.md`
-- `statistics/<task_id>_<method>/coefficients.csv` (regression only)
-- `statistics/<task_id>_<method>/diagnostics.json` (regression only)
-
----
-
-### 7️⃣ Insights Agent
-
-**Purpose:** Convert numbers into business insights.
-
-**Responsibilities:**
-- Identify key findings
-- Explain metric changes
-- Suggest business actions
-- Estimate potential impact
-- Highlight limitations
-
-**Output:**
-- `insights.md`
-
----
-
-### 8️⃣ Reviewer Agent (Guardrails)
-
-**Purpose:** Prevent hallucinations and unsupported claims.
-
-**Validates:**
-- Every statement maps to artifact
-- No metric invented
-- Charts referenced correctly
-- Statistical claims justified
-
-**Output:**
-- `review_log.json`
-
-------------------------------------------------------------------------
-
-# 📁 Project Structure
-
-```
-ai-data-analyst-agents/
-  README.md
-  app/                    # Streamlit / web UI
-  agents/
-    intake.py
-    profiling.py
-    quality.py
-    wrangling.py
-    eda.py
-    stats.py
-    reporting.py
-    reviewer.py
-  tools/
-    pandas_tools.py
-    plotting_tools.py
-    sql_tools.py
-    validation_tools.py
-  ai_data_analyst_agents/statistics/
-    models.py
-    assumptions.py
-    hypothesis_tests.py
-    confidence_intervals.py
-    effect_sizes.py
-    ab_testing.py
-    regression.py
-    selector.py
-    limitations.py
-    artifacts.py
-  pipelines/
-    run_csv_pipeline.py
-    run_sql_pipeline.py
-  artifacts/
-    (generated outputs)
-  tests/
-    test_quality_checks.py
-  configs/
-    rules.yaml            # guardrails, KPI templates
+```bash
+python -m ai_data_analyst_agents.pipelines.run_csv_pipeline \
+  --file data/sample_ecommerce_data.csv \
+  --question "Which segments are driving revenue and conversion?"
 ```
 
-------------------------------------------------------------------------
+### SQL
 
-# 🗺️ Development Roadmap
-
----
-
-## 🧭 Phase-by-Phase Implementation Plan
-
----
-
-## 🟢 Phase 1 – MVP (Single CSV, Single Pipeline)
-
-### 🎯 Goal
-Build a fully automated **CSV → Report** analytics system.
-
-### 📦 Deliverables
-- CSV ingestion pipeline
-- Data Profiling Agent
-- Data Quality validation checks
-- Basic EDA visualizations
-- Auto-generated Markdown report
-- Artifact validation system
-
-### ✅ Success Criteria
-- One command produces a complete `/artifacts/` folder
-- Report references only real computed values
-- No unsupported claims in insights
-
----
-
-## 🟡 Phase 2 – Structured Multi-Agent Orchestration
-
-### 🎯 Goal
-Enable true multi-agent collaboration with modular architecture.
-
-### ➕ Add
-- Agent communication layer
-- Shared memory system
-- Task Planner Agent
-- Evidence-linking system
-- Reviewer / Guardrail Agent
-
-### ✅ Success Criteria
-- Agents operate independently but collaboratively
-- Claims are validated against artifacts
-- Pipeline remains modular and extensible
-
----
-
-## 🟠 Phase 3 – SQL + Business Context Support
-
-### 🎯 Goal
-Support real-world analytics workflows with structured databases.
-
-### ➕ Add
-- SQL query generation
-- Schema-aware query planner
-- Join reasoning logic
-- KPI template library (SaaS, Ecommerce, Marketing, etc.)
-- Business metric definition engine
-
-### ✅ Success Criteria
-- Multi-table datasets can be analyzed
-- Stakeholder-style executive summaries generated
-- Business metrics computed consistently
-
----
-
-## 🔵 Phase 4 – Statistical Intelligence Layer
-
-### 🎯 Goal
-Introduce statistical rigor and experiment evaluation.
-
-### ➕ Add
-- Hypothesis testing module
-- Confidence interval computation
-- Effect size estimation
-- Basic regression models (OLS)
-- A/B testing workflow
-
-### ✅ Success Criteria
-- All statistical claims include assumptions
-- No false or exaggerated significance
-- Statistical limitations explicitly documented in reports
-
-### Phase 4 Example Questions
-- `Did treatment improve conversion versus control?`
-- `Is average order value different between segment A and segment B?`
-- `Which variables are most associated with revenue? Use regression.`
-
-### Phase 4 Example Commands
-- `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/ab_conversion_demo.csv --question "Did treatment improve conversion versus control?"`
-- `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/mean_comparison_demo.csv --question "Is average order value different between segment A and segment B?"`
-- `python -m ai_data_analyst_agents.pipelines.run_csv_pipeline --file data/regression_demo.csv --question "Which variables are most associated with revenue? Use regression."`
-
-### Statistical Artifact Layout
+```bash
+python -m ai_data_analyst_agents.pipelines.run_sql_pipeline \
+  --db-url "sqlite:///data/sample_ecommerce.db" \
+  --question "Which products and customer segments drive performance?"
 ```
+
+SQL access is constrained to read-only analysis. The source layer validates statements, applies row limits, and supports SQLite and PostgreSQL.
+
+### Statistical examples
+
+```bash
+# Two-proportion / A/B analysis
+python -m ai_data_analyst_agents.pipelines.run_csv_pipeline \
+  --file data/ab_conversion_demo.csv \
+  --question "Did treatment improve conversion versus control?"
+
+# Mean comparison
+python -m ai_data_analyst_agents.pipelines.run_csv_pipeline \
+  --file data/mean_comparison_demo.csv \
+  --question "Is average order value different between segment A and segment B?"
+
+# Robust OLS regression
+python -m ai_data_analyst_agents.pipelines.run_csv_pipeline \
+  --file data/regression_demo.csv \
+  --question "Which variables are most associated with revenue? Use regression."
+```
+
+## Statistical intelligence
+
+The task selector chooses methods from the question and available columns. Supported analysis includes:
+
+- Welch and paired mean comparisons
+- Mann–Whitney tests
+- Chi-square and Fisher exact tests
+- Two-proportion tests for conversion experiments
+- Confidence intervals and effect sizes
+- OLS regression with HC3 robust standard errors
+- Assumption diagnostics and explicit limitations
+
+Statistical tasks write self-contained evidence bundles:
+
+```text
+statistics/<task_id>_<method>/
+├── summary.json
+├── assumptions.json
+├── results.md
+├── coefficients.csv      # regression only
+└── diagnostics.json      # when applicable
+```
+
+Association is not presented as causation. Experimental and causal language is allowed only when the design and evidence support it.
+
+## Run artifacts
+
+Each execution creates an isolated, timestamped directory:
+
+```text
 artifacts/run_YYYYMMDD_HHMMSS/
-  statistics/
-    T7_two_proportion_z_test/
-      summary.json
-      assumptions.json
-      results.md
-    T8_ols/
-      summary.json
-      assumptions.json
-      coefficients.csv
-      diagnostics.json
-      results.md
+├── analysis_plan.json
+├── data_profile.json
+├── quality_report.json
+├── quality_warnings.md
+├── cleaned.csv
+├── feature_log.json
+├── analysis_tasks.json
+├── metrics_outputs.json
+├── next_steps_plan.json
+├── next_steps_metrics_outputs.json
+├── eda_summary.json
+├── analysis_readiness.json
+├── final_report.md
+├── report_metadata.json
+├── review_log.json
+├── run_scorecard.json
+├── agent_messages.json
+├── shared_memory_audit.json
+├── run_manifest.json
+├── charts/
+└── statistics/
 ```
 
----
+`shared_memory_audit.json` shows which facts each agent read and wrote. `agent_messages.json` captures collaboration events. The manifest and review artifacts make it possible to trace a final claim back through the pipeline to its computed source.
 
-## 🟣 Phase 5 – Dashboard + Interactive Mode
+## Token budgets
 
-### 🎯 Goal
-Enable human-agent collaboration and interactive refinement.
+The planner and reporter use separate output budgets:
 
-### ➕ Add
-- Streamlit web interface
-- Interactive artifact viewer
-- Follow-up Q&A over computed artifacts
-- Editable report sections
-- Chart customization
-- Agent monitoring panel
+| Setting | Default | Purpose |
+|---|---:|---|
+| `LLM_PLANNER_MAX_TOKENS` | 8,192 | Structured plans and analytical task definitions |
+| `LLM_REPORT_MAX_TOKENS` | 16,384 | Full evidence-grounded reports |
+| `llm.max_tokens` | 16,384 | Compatibility fallback |
 
-### ✅ Success Criteria
-- Analysts can refine and adjust output
-- Stakeholders can ask follow-up questions
-- Interactive insights remain artifact-grounded
+These are maximum **output** tokens, not prompt limits. The selected provider model must fit both the prompt and requested output within its context window. Increase a budget only when the corresponding metadata reports a length-based truncation; larger values increase latency and cost but do not automatically improve reasoning quality.
 
----
+Provider-reported usage and finish reasons are saved in `planner_llm_metadata.json` and `report_llm_metadata.json`.
 
-## 🔴 Phase 6 – Advanced & Production Features
+## Security model
 
-### ➕ Add
-- Automated anomaly detection
-- Data drift monitoring
-- Scheduled report generation
-- Model-based forecasting
-- Cloud deployment support
-- Multi-user authentication & access control
-- Full audit logs for reproducibility
+- SQL inputs are restricted to read-only statements and bounded result sizes.
+- Raw-row exposure to the LLM is disabled by default.
+- Upload size and user-facing error detail are configurable.
+- Authentication uses PostgreSQL-compatible storage, password hashing, session expiry, and lockout controls.
+- Reports must cite artifact-backed evidence; the reviewer rejects unsupported claims.
 
----
+Review the defaults in `.env.example`, `configs/settings.yaml`, and `configs/rules.yaml` before deploying beyond local development.
 
-# 🧪 Testing Strategy
+## Project structure
 
-- Unit tests for data quality checks
-- Snapshot tests for report consistency
-- Schema validation tests
-- Artifact-reference validation tests
-- Regression tests on benchmark datasets
-- End-to-end pipeline tests
+```text
+.
+├── app/                         # Flask routes, auth, templates, CSS, and JavaScript
+├── ai_data_analyst_agents/
+│   ├── agents/                  # Specialized analytics agents
+│   ├── core/                    # Orchestration, memory, evidence, security, settings
+│   ├── evaluation/              # Benchmark and quality evaluation harness
+│   ├── pipelines/               # CSV and SQL command-line entry points
+│   ├── statistics/              # Tests, models, diagnostics, and statistical artifacts
+│   └── tools/                   # Pandas, plotting, and validation helpers
+├── benchmarks/                  # Evaluation suites
+├── configs/                     # Runtime, LLM, QA, SQL, and security configuration
+├── data/                        # Sample datasets and databases
+├── docs/assets/                 # README and documentation media
+├── artifacts/                   # Generated analysis runs
+└── tests/                       # Unit, integration, security, and end-to-end tests
+```
 
----
+## Development
 
-🚀 *From raw data to defensible decisions — systematically and reproducibly.*
+Run the automated checks before opening a pull request:
 
-------------------------------------------------------------------------
+```bash
+python -m pytest -q
+pyright
+ruff check .
+```
 
-# 🛠️ Technology Stack
+Contributions are welcome. Please keep changes focused, add tests for new behavior, preserve artifact compatibility where practical, and document user-facing configuration.
 
-### Core
-- Python 3.10+
-- Pandas
-- NumPy
-- SciPy
-- Matplotlib / Plotly
+## Current scope
 
-### Validation
-- Great Expectations / Pandera
+Available today:
 
-### Agent Framework
-- LangGraph / CrewAI / Custom Orchestrator
+- End-to-end CSV and SQL analytics
+- Shared-memory multi-agent orchestration
+- Evidence-linked reports and reviewer feedback loops
+- Business KPI templates and statistical testing
+- Flask authentication, uploads, previews, run tracking, and artifact viewing
+- Evaluation harness and run scorecards
 
-### Execution
-- Docker sandbox for code execution
+Planned areas include follow-up Q&A over computed evidence, editable report sections, chart customization, scheduled analyses, drift monitoring, forecasting, and deployment tooling.
 
-### Storage
-- JSON artifacts
-- Markdown reports
-- CSV outputs
+## Author
 
-------------------------------------------------------------------------
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a new branch (`git checkout -b feature/your-feature-name`)
-3. Make your changes
-4. Commit your changes (`git commit -m 'Add some feature'`)
-5. Push to the branch (`git push origin feature/your-feature-name`)
-6. Open a Pull Request
-
-------------------------------------------------------------------------
-
-### Development Guidelines
-
-- Follow PEP 8 style guidelines
-- Add unit tests for new features
-- Update documentation as needed
-- Ensure all tests pass before submitting PR
-
-------------------------------------------------------------------------
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-------------------------------------------------------------------------
-
-## 👨‍💻 Author
-
-**Priyansh Sarvaiya**
-- GitHub: [@Priyanshsarvaiya](https://github.com/Priyanshsarvaiya)
-
-------------------------------------------------------------------------
-
-## 🙏 Acknowledgments
-
-- Thanks to the open-source community for the amazing tools and libraries
-- Inspired by the latest developments in AI agents and autonomous systems
-
-------------------------------------------------------------------------
-
-## 📮 Contact & Support
-
-For questions, issues, or suggestions:
-- Open an issue on GitHub
-- Reach out via GitHub discussions
-
-------------------------------------------------------------------------
-
-## 🗺️ Roadmap
-
-### 🟢 Phase 1 – MVP: End-to-End CSV Analytics Pipeline
-- [✅] Implement CSV ingestion pipeline
-- [✅] Add Intake (Scoping) Agent
-- [✅] Implement Data Profiling Agent
-- [✅] Implement Data Quality validation checks
-- [✅] Build Data Cleaning & Feature Engineering Agent
-- [✅] Generate automated EDA charts
-- [✅] Auto-generate structured Markdown report
-- [✅] Enforce artifact-based reporting (no unsupported claims)
-- [✅] One-command pipeline execution → `/artifacts/` folder output
+Built by [Priyansh Sarvaiya](https://github.com/Priyanshsarvaiya).
 
 ---
 
-### 🟡 Phase 2 – True Multi-Agent Orchestration
-- [✅] Introduce structured agent communication layer
-- [✅] Add shared memory between agents
-- [✅] Implement task planning & delegation logic
-- [✅] Add Reviewer / Guardrail Agent for claim validation
-- [✅] Evidence-linking system (every claim references artifact)
-- [✅] Improve modularity for agent swapping/extending
-
----
-
-### 🟠 Phase 3 – SQL & Business Context Expansion
-- [✅] Add SQL data source support (PostgreSQL, SQLite)
-- [✅] Schema-aware query generation
-- [✅] Multi-table join reasoning
-- [✅] KPI template library (SaaS, Ecommerce, Marketing, Ops)
-- [✅] Business metric definition engine
-- [✅] Segment & cohort analysis templates
-
----
-
-### 🔵 Phase 4 – Statistical Intelligence Layer
-- [✅] Hypothesis testing module
-- [✅] Confidence interval reporting
-- [✅] Effect size calculation
-- [✅] A/B testing workflow
-- [✅] Basic regression (OLS) integration
-- [✅] Assumption validation & statistical guardrails
-- [✅] Explicit statistical limitations section in reports
-
----
-
-### 🟣 Phase 5 – Interactive Dashboard & Human-Agent Collaboration
-- [ ] Streamlit web interface
-- [ ] Interactive artifact viewer
-- [ ] Follow-up Q&A over computed results
-- [ ] Editable report sections
-- [ ] Chart customization support
-- [ ] Agent activity monitoring panel
-- [ ] User feedback loop for refinement
-
----
-
-### 🔴 Phase 6 – Advanced & Production-Ready Features
-- [ ] Automated anomaly detection
-- [ ] Data drift monitoring
-- [ ] Scheduled report generation
-- [ ] Forecasting module
-- [ ] Cloud deployment support
-- [ ] Multi-user support & access control
-- [ ] Audit logs for reproducibility
-- [ ] Performance benchmarking against human baseline
-
-------------------------------------------------------------------------
-
-**Note**: This project is under active development. Features and documentation may change.
-**Note**: This project is designed as a serious analytics engineering system — not just a chatbot over CSV. It aims to demonstrate production-grade data reasoning with AI agents.
+<p align="center">
+  <strong>Serious analytics needs more than a plausible answer—it needs a traceable one.</strong>
+</p>

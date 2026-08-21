@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Workspace · Analyst OS{% endblock %}
+{% block content %}
+<main class="shell">
+  <section class="page-heading">
+    <div>
+      <span class="eyebrow">Analysis workspace</span>
+      <h1>Good data. Clear answers.</h1>
+      <p>Ask a business question, connect your source, and let the analyst team build the evidence.</p>
+    </div>
+    <div class="heading-stat"><strong>{{ runs|length }}</strong><span>recent runs</span></div>
+    <div class="heading-stat"><strong>{{ completed }}</strong><span>completed</span></div>
+  </section>
+
+  <section class="workspace-grid">
+    <form class="analysis-card" action="{{ url_for('analyze') }}" method="post" enctype="multipart/form-data" data-analysis-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="card-heading">
+        <span class="step-number">01</span>
+        <div><h2>Start a new analysis</h2><p>Choose a source and frame the decision you need to make.</p></div>
+      </div>
+
+      <div class="source-switch" data-source-switch>
+        <label><input type="radio" name="source_type" value="csv" checked><span><b>CSV upload</b><small>Analyze a local dataset</small></span></label>
+        <label><input type="radio" name="source_type" value="sql"><span><b>SQL database</b><small>Connect read-only</small></span></label>
+      </div>
+
+      <div data-source-panel="csv">
+        <label class="dropzone" data-dropzone>
+          <input type="file" name="csv_files" accept=".csv,text/csv" multiple data-csv-input>
+          <span class="upload-icon">↑</span>
+          <strong>Drop CSV files here</strong>
+          <small>or click to browse · compatible files are combined by rows · up to {{ max_upload_mb }} MB total</small>
+          <em data-file-name>No files selected</em>
+        </label>
+        <section class="csv-preview" data-csv-preview hidden>
+          <div class="preview-toolbar">
+            <div><strong>Data preview</strong><small data-preview-summary></small></div>
+            <button class="button button-secondary button-small" type="button" data-add-csv>＋ Add more CSV</button>
+          </div>
+          <div class="file-tabs" data-file-tabs></div>
+          <div class="table-wrap"><table class="preview-table" data-preview-table></table></div>
+          <p class="preview-note">Showing the first 12 rows. Remove a file from its tab before analysis if needed.</p>
+        </section>
+      </div>
+
+      <div class="sql-fields" data-source-panel="sql" hidden>
+        <label class="field"><span>Database URL</span><input name="db_url" value="sqlite:///data/sample.db" placeholder="sqlite:///data/sample.db"></label>
+        <label class="field"><span>Primary table <i>optional</i></span><input name="base_table" placeholder="orders"></label>
+      </div>
+
+      <label class="field question-field">
+        <span>Business question</span>
+        <textarea name="question" rows="4" placeholder="Why did conversion decline last quarter, and which segments drove the change?" required></textarea>
+        <small>Be specific about the metric, segment, and timeframe when possible.</small>
+      </label>
+      <button class="button button-primary button-run" type="submit">Run analysis <span>→</span></button>
+      <div class="running-state" hidden data-running-state><span class="spinner"></span><div><strong>Your analyst team is working</strong><small>Profiling, validating, analyzing, and reviewing…</small></div></div>
+    </form>
+
+    <aside class="process-card">
+      <span class="eyebrow">How it works</span>
+      <h2>A complete analysis, not a shortcut.</h2>
+      <ol class="process-list">
+        <li><span>01</span><div><b>Scope</b><small>Clarify the question and success metrics.</small></div></li>
+        <li><span>02</span><div><b>Validate</b><small>Profile quality, missingness, and anomalies.</small></div></li>
+        <li><span>03</span><div><b>Analyze</b><small>Compute metrics, statistics, and charts.</small></div></li>
+        <li><span>04</span><div><b>Review</b><small>Trace every claim back to evidence.</small></div></li>
+      </ol>
+      <div class="trust-note"><span>✓</span><p><b>Read-only SQL</b><br>Database queries are guarded against write operations.</p></div>
+    </aside>
+  </section>
+
+  <section class="runs-section">
+    <div class="section-heading"><div><span class="eyebrow">History</span><h2>Recent analyses</h2></div></div>
+    {% if runs %}
+    <div class="run-list">
+      {% for run in runs %}
+      <a class="run-row" href="{{ url_for('run_detail', run_uuid=run.run_uuid) }}">
+        <span class="source-icon source-{{ run.source_type }}">{{ "DB" if run.source_type == "sql" else "CSV" }}</span>
+        <span class="run-main"><strong>{{ run.run_metadata.get('business_question', 'Untitled analysis') }}</strong><small>{{ run.source_name or run.source_type|upper }} · {{ run.created_at[:10] }}</small></span>
+        <span class="status status-{{ run.status }}"><i></i>{{ run.status }}</span>
+        <span class="row-arrow">→</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-card"><span>⌁</span><h3>No analyses yet</h3><p>Your completed work will appear here.</p></div>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}
